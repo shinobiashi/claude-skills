@@ -1,0 +1,59 @@
+---
+name: post-merge
+description: PRがマージされた後の後始末を行う。デフォルトブランチの最新化、マージ済みローカルブランチとworktreeの片付け、今回の学びをCLAUDE.mdへ蒸留＋剪定、繰り返しパターンのコマンド化提案までを一気通貫で実施する。「マージした」「PRをマージ」「ブランチを片付けたい」「区切りがついた」「post-merge」などに言及したら、明示的に頼まれなくても積極的にこのスキルを使うこと。破壊的操作は必ず確認を取る。
+argument-hint: "[マージしたブランチ名(任意)]"
+allowed-tools: Read, Edit, Grep, Glob, Bash(git status:*), Bash(git branch:*), Bash(git switch:*), Bash(git checkout:*), Bash(git pull:*), Bash(git fetch:*), Bash(git log:*), Bash(git diff:*), Bash(git worktree:*), Bash(git symbolic-ref:*), Bash(git remote:*), Bash(git merge --ff-only:*), Bash(git merge-base:*), Bash(git ls-remote:*)
+---
+
+# Post-Merge 後始末
+
+PRがマージされたら「そのタスクは完了」。次のタスクにきれいな状態で入るための後始末をこの順で行う。
+
+## 大前提
+
+- **`/clear` はこのスキルからは実行できない**（セッション制御コマンドのため）。最後に必ずユーザーへ手動実行を促す。
+- 破壊的操作（ローカルブランチ削除・worktree削除・prune）は、**実行前に必ず対象を提示して承認を取る**。承認なしに削除しない。
+- 未コミットの変更が残っている場合は勝手に進めず、ユーザーに判断を仰ぐ。
+
+## 手順
+
+### 1. 状態を確認する
+- `git status` と `git branch --show-current` で現在地を確認。
+- **フォーク運用の検出**: `git remote -v` で `upstream` リモートの有無を確認する。`upstream` があれば PR のマージ先は upstream（本流）であり、以降のマージ判定はすべて **`upstream/<default>` を基準**にする（`origin/<default>` はフォークで、本流より遅れていることが多い）。`gh` コマンドはデフォルトで本流リポジトリを見るため、フォークのブランチ指定には `--repo <本流> --head <フォークowner>:<branch>` が必要な点にも注意。
+- デフォルトブランチを検出する: `git symbolic-ref --short refs/remotes/origin/HEAD`。取得できなければ `main` を想定（必要なら `master`/`develop` をユーザーに確認）。
+- マージ済みブランチ名は、引数 `$ARGUMENTS` があればそれを、無ければ現在のブランチ名を採用する。
+
+### 2. デフォルトブランチを最新化する
+- 通常: `git switch <default>`（古い環境なら `git checkout <default>`）→ `git pull`。
+- **フォーク運用**: `git fetch upstream` → `git switch <default>` → `git merge --ff-only upstream/<default>` → `git push origin <default>` でフォークの default も同期する。
+- ここで未コミットの変更があれば停止してユーザーに確認。
+
+### 3. マージ済みブランチとworktreeを片付ける（承認必須）
+- `git branch --merged <default>` で対象がマージ済みか確認する（フォーク運用では `--merged upstream/<default>`）。
+- マージ済みなら削除を提案 → 承認後に `git branch -d <branch>`。マージ済みでなければ削除せず、その旨を報告。
+- `git worktree list` を確認し、対象ブランチに紐づく worktree があれば削除を提案 → 承認後に `git worktree remove <path>`。（`claude -w` を使っていた場合に該当）
+- 追跡ブランチの掃除として `git fetch --prune` を提案。
+- **フォーク運用**: origin（フォーク）に残っているマージ済みリモートブランチの削除も提案してよい。削除前に必ず `git ls-remote` + `git merge-base --is-ancestor <sha> upstream/<default>` で**1本ずつ**マージ済みを確認し、未マージのブランチは残して報告する。削除は `git push origin --delete <branch>`（承認必須・権限プロンプトが出るのは意図どおり）。
+
+### 4. 学びを CLAUDE.md に蒸留し、同時に剪定する
+- 今回のマージ内容を把握する: `git log --oneline <default>@{1}..<default>` や該当範囲の `git diff`。
+- 「**毎セッション効く規約・ハマりどころ**」だけを抽出する。この開発スタックでは特に次を意識する:
+  - **WordPressプラグイン(PHP)**: フック登録のタイミング、HPOS対応のデータアクセス方法、nonce/権限(`current_user_can`)/サニタイズ・エスケープの方針、i18nロードの作法、名前空間・命名規約。
+  - **Laravel(PHP)**: FormRequest/Policy の置き場所、Service/Action の分割方針、マイグレーション・命名規約、キュー/イベントの約束事。
+  - **TypeScript / React**: 型の配置、コンポーネント分割方針、状態管理・データ取得フックの約束事、strictルール。
+- 既存の CLAUDE.md を読み、(a) 追記すべき新規約 と (b) 今回のマージで**古くなった・矛盾する記述** の両方を洗い出す。
+- 追加と削除を**差分としてユーザーに提示** → 承認後に Edit で反映する。
+- 原則: CLAUDE.md は毎セッションの冒頭で読み込まれ context を消費する。**簡潔第一（目安200行以内）**。手順ものや特定ディレクトリだけに効く規則は CLAUDE.md に足さず、別スキル / スラッシュコマンド / `.claude/rules/` へ逃がすことを提案する。
+
+### 5. 繰り返しパターンをコマンド化する（提案のみ）
+- 今回の作業で2回以上踏んだ手順や、定型化したレビュー観点があれば、新しいスキル / スラッシュコマンド / サブエージェントへの切り出しを**提案**する。
+- ここでは自動作成しない。ユーザーが望めば別途作成に進む。
+
+### 6. 締め（ユーザーへの案内）
+- 実施した後始末を1〜3行で簡潔に報告する。
+- 「次のタスクに移る前に `/clear` を手動で実行してください」と促す（`/compact` ではなく `/clear`。タスク完了時は履歴を引き継がない）。
+- 厄介な問題を解いたセッションなら、`/clear` の前に `/rename` で命名、または `/export` で保存を提案する。
+
+## 出力スタイル
+- 各ステップの前に「何をしようとしているか」を1行で述べ、破壊的操作は承認を待つ。
+- 最終報告は箇条書きで短く。冗長な説明は避ける。
