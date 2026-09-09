@@ -1,6 +1,6 @@
 # WooCommerce Gateway Class Patterns
 
-Last updated: 2026-07-02 (WooCommerce current stable: 10.9; 11.0 scheduled 2026-07-28)
+Last updated: 2026-07-02 (WooCommerce current stable: 11.1.0 as of 2026-09-09; 11.0 released 2026-07-28)
 
 ## Plugin file structure
 
@@ -33,7 +33,7 @@ payjp-for-woocommerce/
  * Requires at least: 6.4
  * Requires PHP: 8.0
  * WC requires at least: 8.0
- * WC tested up to: 10.9
+ * WC tested up to: 11.1
  * Author:      Your Name
  * License:     GPL-2.0-or-later
  */

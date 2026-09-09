@@ -2,7 +2,7 @@
 name: wp-phpunit
 version: "1.0.0"
 description: "Use when setting up, writing, or fixing PHPUnit tests for WordPress plugins: phpunit.xml configuration, bootstrap setup, WP_UnitTestCase patterns, WooCommerce test framework (WC_Unit_Test_Case), factory classes, mock HTTP requests, and test database isolation."
-compatibility: "Targets PHPUnit 9.x (the version the WordPress core test suite requires) for WP/WooCommerce integration tests; WordPress 6.7+, WooCommerce 9.0+ (current stable: WP 7.0, WC 10.9). PHPUnit 10+ only works for pure unit tests that do not load the WP suite. Requires wp-env or a local WordPress install for integration tests."
+compatibility: "Targets PHPUnit 9.x (the version the WordPress core test suite requires) for WP/WooCommerce integration tests; WordPress 6.7+, WooCommerce 9.0+ (current stable: WP 7.1, WC 11.1.0; verified 2026-09-09). PHPUnit 10+ only works for pure unit tests that do not load the WP suite. Requires wp-env or a local WordPress install for integration tests."
 ---
 
 # WP PHPUnit

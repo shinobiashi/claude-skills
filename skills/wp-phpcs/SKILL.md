@@ -2,7 +2,7 @@
 name: wp-phpcs
 version: "1.0.0"
 description: "Use when setting up, configuring, or running PHP_CodeSniffer (PHPCS/PHPCBF) in WordPress projects: .phpcs.xml.dist setup, WordPress-Coding-Standards installation, running phpcs/phpcbf, fixing common violations, and integrating with composer scripts and CI."
-compatibility: "Targets WordPress Coding Standards 3.3.0 with PHP_CodeSniffer 3.13.x. Requires Composer. Note: PHPCS 4.0 is released but WPCS does not yet support it — stay on PHPCS 3.13.x for WordPress work."
+compatibility: "Targets WordPress Coding Standards 3.4.1 with PHP_CodeSniffer 3.13.x (3.13.5+); verified 2026-09-09. Requires Composer. Note: PHPCS 4.0 is released but WPCS does not yet support it — stay on PHPCS 3.13.x for WordPress work."
 ---
 
 # WP PHP_CodeSniffer (PHPCS)
@@ -48,13 +48,13 @@ If a composer script already exists (e.g. `composer run phpcs`), prefer that ove
 
 ```bash
 composer require --dev \
-  "squizlabs/php_codesniffer:^3.13.4" \
-  "wp-coding-standards/wpcs:^3.3" \
+  "squizlabs/php_codesniffer:^3.13.5" \
+  "wp-coding-standards/wpcs:^3.4" \
   dealerdirect/phpcodesniffer-composer-installer
 ```
 
-> **Stay on PHPCS 3.13.x.** PHPCS 4.0 is released (4.0.1), but WPCS 3.3.0 requires
-> `squizlabs/php_codesniffer ^3.13.4` and does not yet support 4.0 — pinning avoids Composer
+> **Stay on PHPCS 3.13.x.** PHPCS 4.0 is released (4.0.4), but WPCS 3.4.1 requires
+> `squizlabs/php_codesniffer ^3.13.5` and does not yet support 4.0 (woocommerce/woocommerce-sniffs 2.0.0 likewise requires wpcs ^3.4.1) — pinning avoids Composer
 > resolving an incompatible major. (WPCS latest is 3.3.0; it pulls in PHPCSUtils ^1.1 and
 > PHPCSExtra ^1.5.)
 

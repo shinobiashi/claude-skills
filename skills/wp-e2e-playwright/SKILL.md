@@ -2,7 +2,7 @@
 name: wp-e2e-playwright
 version: "1.0.0"
 description: "Use when setting up or writing Playwright end-to-end tests for WordPress plugins and WooCommerce extensions: @wordpress/e2e-test-utils-playwright setup, playwright.config.js, wp-env integration, WooCommerce checkout/payment flow testing, admin settings testing, and CI integration."
-compatibility: "Targets @playwright/test 1.40+ (current stable 1.61.x), @wordpress/e2e-test-utils-playwright 1.x (current 1.50.0; the package has graduated from the 0.x line), WordPress 6.7+, WooCommerce 9.0+ (current stable: WP 7.0, WC 10.9). Requires wp-env (Docker) for local test environment."
+compatibility: "Targets @playwright/test 1.40+ (current stable 1.63.x), @wordpress/e2e-test-utils-playwright 1.x (current 1.54.0; the package has graduated from the 0.x line), WordPress 6.7+, WooCommerce 9.0+ (current stable: WP 7.1, WC 11.1.0; verified 2026-09-09). Requires wp-env (Docker) for local test environment."
 ---
 
 # WP E2E Playwright
@@ -138,15 +138,15 @@ Minimal CI job:
 e2e:
   runs-on: ubuntu-latest
   steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-node@v5
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
     - run: npm ci
     - run: npx playwright install --with-deps chromium
     - run: npx wp-env start
     - run: npm run test:e2e
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       if: failure()
       with:
         name: playwright-report

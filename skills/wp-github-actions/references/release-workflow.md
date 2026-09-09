@@ -24,7 +24,7 @@ For pre-releases use a hyphen suffix: `v1.2.0-beta.1`, `v1.2.0-rc.1`. The condit
 Always build JS/CSS before creating the ZIP so the distributed archive contains compiled files:
 
 ```yaml
-- uses: actions/setup-node@v5
+- uses: actions/setup-node@v7
   with:
     node-version: '24'
     cache: 'npm'

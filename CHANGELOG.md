@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+- バージョン表記を 2026-09-09 時点に更新（WP 7.1 / WC 11.1.0、WPCS 3.4.1 + PHPCS 3.13.5、Playwright 1.63 / e2e-utils 1.54、`Tested up to: 7.1`、GitHub Actions を checkout@v7 / setup-node@v7 / cache@v6 / upload-artifact@v7 に）: `wp-github-actions`、`wp-phpcs`、`wp-e2e-playwright`、`wp-phpunit`、`wp-phpstan`、`wp-rest-api`、`wp-plugin-development`、`wp-wpcli-and-ops`、`wp-block-development`、`wp-abilities-api`、`wc-block-development`、`wp-org-release`、`payjp-v2-woocommerce`、`woo-marketplace-qit`（CI 例）
+- `wp-abilities-api`: WordPress/agent-skills trunk（d87ee69）の更新を取り込み。`references/php-registration.md` を新 API 形（`execute_callback`、必須 `permission_callback`、`meta.annotations`、`meta.mcp.public`、ID は `plugin/verb-noun`）に置換し、参照 7 本（domain-vs-projection、grouping-heuristic、shared-core-service、plugin-family-patterns、error-code-vocabulary、input-schema-gotchas、delegate-helper-pattern）を追加。ローカル加筆（6.9 でコア入り、JS パッケージ 2 種）は維持
+
 ## 2026-09-09 — 初回統合
 
 ### Added

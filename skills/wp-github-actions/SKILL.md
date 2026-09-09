@@ -2,7 +2,7 @@
 name: wp-github-actions
 version: "1.0.0"
 description: "Use when setting up or updating GitHub Actions CI/CD workflows for WordPress plugins: PHPCS, PHPStan, PHPUnit matrix testing, JS/CSS linting, automated ZIP release with GitHub Release attachment, and WordPress.org SVN deployment via action."
-compatibility: "Targets GitHub Actions with ubuntu-latest (24.04) runners. Uses actions/checkout@v5 (v4 still OK), shivammathur/setup-php@v2, actions/setup-node@v5, actions/cache@v4, actions/upload-artifact@v4 (v3 is retired and fails)."
+compatibility: "Targets GitHub Actions with ubuntu-latest (24.04) runners. Uses actions/checkout@v7 (v4/v5 still OK), shivammathur/setup-php@v2 (2.37), actions/setup-node@v7, actions/cache@v6, actions/upload-artifact@v7 (v4 still OK; v3 is retired and fails). Majors verified 2026-09-09."
 ---
 
 # WP GitHub Actions
@@ -62,7 +62,7 @@ Create `.github/workflows/ci-js.yml` with:
 - `lint-css` — `npm run lint:css`
 - `build` — `npm run build` (verify build succeeds)
 
-Use `actions/setup-node@v5` with `cache: 'npm'`.
+Use `actions/setup-node@v7` with `cache: 'npm'`.
 
 See: `references/workflow-templates.md` — ci-js.yml section
 

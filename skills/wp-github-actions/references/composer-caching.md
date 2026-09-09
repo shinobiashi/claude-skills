@@ -10,7 +10,7 @@ Proper caching significantly reduces CI run time. This reference covers recommen
 
 ```yaml
 - name: Cache Composer dependencies
-  uses: actions/cache@v4
+  uses: actions/cache@v6
   with:
     path: vendor
     key: composer-php${{ matrix.php }}-${{ hashFiles('composer.lock') }}
@@ -41,7 +41,7 @@ Key design:
   id: composer-cache
   run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
 
-- uses: actions/cache@v4
+- uses: actions/cache@v6
   with:
     path: ${{ steps.composer-cache.outputs.dir }}
     key: composer-${{ hashFiles('composer.lock') }}
@@ -53,10 +53,10 @@ This caches the Composer download cache (`~/.composer/cache`) rather than `vendo
 
 ## npm caching
 
-`actions/setup-node@v5` has built-in caching — no separate `actions/cache` step needed:
+`actions/setup-node@v7` has built-in caching — no separate `actions/cache` step needed:
 
 ```yaml
-- uses: actions/setup-node@v5
+- uses: actions/setup-node@v7
   with:
     node-version: '24'
     cache: 'npm'
@@ -67,7 +67,7 @@ This caches `~/.npm` automatically, keyed by `package-lock.json`. Subsequent `np
 For Yarn:
 
 ```yaml
-- uses: actions/setup-node@v5
+- uses: actions/setup-node@v7
   with:
     node-version: '24'
     cache: 'yarn'

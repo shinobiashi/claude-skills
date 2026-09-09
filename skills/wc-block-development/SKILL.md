@@ -2,7 +2,7 @@
 name: wc-block-development
 version: "1.0.0"
 description: "Use when developing WooCommerce-specific Gutenberg blocks: frontend blocks using WC data stores, checkout/cart block extensions (registerCheckoutFilters, Slot/Fill, IntegrationInterface), and Store API schema extensions (ExtendSchema). NOTE: WooCommerce Product Editor blocks (@woocommerce/product-editor) are retired — deprecated in WC 10.9, removed from core in WC 11.0 (2026-07-28); do not build new work on them. Complements wp-block-development which covers general block fundamentals."
-compatibility: "Targets WooCommerce 9.0+, WordPress 6.6+ (current stable: WC 10.9, WP 7.0), @woocommerce/dependency-extraction-webpack-plugin 3.x. Requires Composer and Node.js."
+compatibility: "Targets WooCommerce 9.0+, WordPress 6.6+ (current stable: WC 11.1.0, WP 7.1; verified 2026-09-09), @woocommerce/dependency-extraction-webpack-plugin 3.x+ (latest 5.1.0). Requires Composer and Node.js."
 ---
 
 # WooCommerce Block Development

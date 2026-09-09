@@ -1,7 +1,7 @@
 ---
 name: payjp-v2-woocommerce
 description: "Use when developing WooCommerce payment gateway plugins using PAY.JP v2 API: credit card payments, PayPay payments, Payment Flow API, Checkout v2, payments.js integration, webhook handling, and WooCommerce gateway class implementation."
-compatibility: "Targets WooCommerce 8.0+ (current stable 10.9), WordPress 6.4+, PHP 8.0+. Requires PAY.JP v2 API keys (v2 is generally available; account enablement may be required)."
+compatibility: "Targets WooCommerce 8.0+ (current stable 11.1.0 as of 2026-09-09), WordPress 6.4+, PHP 8.0+. Requires PAY.JP v2 API keys (v2 is generally available; account enablement may be required)."
 last_updated: "2026-07-02"
 docs_source: "https://docs.pay.jp/v2/guide"
 ---

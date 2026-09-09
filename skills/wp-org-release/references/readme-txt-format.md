@@ -16,7 +16,7 @@ Contributors:      myusername, contributor2
 Donate link:       https://example.com/donate
 Tags:              keyword1, keyword2, keyword3, keyword4, keyword5
 Requires at least: 6.4
-Tested up to:      7.0
+Tested up to:      7.1
 Stable tag:        1.2.0
 Requires PHP:      7.4
 License:           GPLv2 or later
