@@ -57,6 +57,34 @@ Copilot は判定が **`Needs a closer look`** のとき、インラインコメ
 - ユーザーへの報告・確認（AskUserQuestion 含む）は常に日本語。
 - コミットメッセージ末尾の Co-Authored-By はシステムプロンプトの指定に従う。
 
+## 補助スクリプト
+
+スレッドへの返信・Resolve・PR への対応サマリコメント投稿には、本スキル同梱の
+`scripts/gate-threads.sh`（起動時に表示される「Base directory for this skill:」配下）を使う。
+手書きの `gh` コマンドに戻さない理由:
+
+- `gh pr comment --body "..."` や `gh api graphql -f query='...'` にコメント本文を直接埋め込むと、
+  括弧・バッククォート・改行を含む文面でシェルのパースが壊れる（複数プロジェクトの実運用で発生済み）。
+  本文は必ずファイル（または stdin）から渡す。
+- 返信と Resolve を別々のスレッド ID で手打ちすると、片方のスレッドに返信してもう片方を
+  Resolve する取り違えが起こりうる。`done`/`reply` はスレッド ID 1 つから両方を解決するため、
+  この種の事故を防ぐ。
+
+```bash
+S=<Base directory for this skill>/scripts/gate-threads.sh
+
+"$S" list <PR> [SINCE_ISO8601]              # 未解決スレッドを TSV で一覧（50件超も自動でページング）
+"$S" show <THREAD_ID>                        # 1件の全文を読む（評価に使う）
+"$S" status <PR> [SINCE_ISO8601]             # bot ごとの未解決件数
+"$S" done  <PR> <THREAD_ID> <BODY_FILE|->    # 修正した指摘: 返信してから Resolve
+"$S" reply <PR> <THREAD_ID> <BODY_FILE|->    # 保留した指摘: 返信のみ（Resolve しない）
+```
+
+`--dry-run` を付けると書き込み系コマンドの実行内容だけを表示する。`done` は返信が失敗したら
+Resolve しない（説明のないままスレッドを閉じないため）。PR 本文への対応サマリコメント
+（手順 7）も同じ理由で `gh pr comment <PR> --body-file <ファイル>` を使い、`--body` に直接
+書かない。
+
 ## 手順
 
 ### 1. 対象 PR の特定
@@ -241,16 +269,9 @@ lint/test だけでなく、そのプロジェクトに「不変条件」「ア�
 
 ### 6. スレッドの Resolve
 
-対応した（またはユーザーが対応不要を承認した）スレッドを GraphQL mutation で Resolve する:
-
-```bash
-gh api graphql -f query='
-mutation {
-  resolveReviewThread(input: {threadId: "<THREAD_ID>"}) {
-    thread { id isResolved }
-  }
-}'
-```
+対応した（またはユーザーが対応不要を承認した）スレッドを、上記「補助スクリプト」の
+`gate-threads.sh done`（修正した指摘）または `reply`（保留した指摘）で処理する。単独の
+resolve コマンドは無い — 返信なしでスレッドが閉じられることを防ぐため、常に返信とセットで行う。
 
 本文指摘（系統 B）にはスレッドが無いため Resolve する対象は無い。手順 7 の対応サマリコメントが
 唯一の記録になるので、本文指摘を 1 件でも扱った場合は手順 7 を省略しない。
@@ -259,8 +280,9 @@ Copilot の再レビュー依頼（`gh pr edit <N> --add-reviewer @copilot`）�
 
 ### 7. PR への対応コメント投稿
 
-`gh pr comment <N> --body "..."` で対応サマリを投稿する（言語は引数で指定されたもの。
-デフォルト: 日本語）。含める内容:
+`gh pr comment <N> --body-file <ファイル>` で対応サマリを投稿する（`--body` に本文を直接
+書かない。上記「補助スクリプト」参照）。言語は引数で指定されたもの（デフォルト: 日本語）。
+含める内容:
 
 - 対応したレビューコメントへのリンク
   （`https://github.com/<owner>/<repo>/pull/<N>#discussion_r<databaseId>`）
@@ -292,7 +314,7 @@ Copilot の再レビュー依頼（`gh pr edit <N> --add-reviewer @copilot`）�
 - `isOutdated: true` でも未解決なら対象に含める（コードが既に変わって解消済みの場合は
   「対応不要」としてユーザー確認に回す）。
 - スレッド数が 50 を超える場合は GraphQL のページネーション（`after` カーソル）で
-  全件取得する。
+  全件取得する（`gate-threads.sh list` は自動でページングする）。
 - bot（Copilot・Codex等）ではなく **人間のレビュアー** による未解決コメントが混ざっている
   場合は、勝手に Resolve せず、対象に含めるかどうかをユーザーに確認する。bot同士の区別
   （例: CopilotとCodexの両方が指摘している）は不要 — bot由来のコメントはすべて通常通り

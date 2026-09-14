@@ -442,4 +442,38 @@ public function test_throws_on_invalid_input(): void {
 }
 ```
 
+---
+
+## Verifying uncertain core/framework behavior with a disposable test
+
+Don't assume how WordPress/WooCommerce core behaves in an edge case (a getter's return
+value on a variant object, a filter's exact firing conditions, how a validation function
+handles malformed input). If the answer isn't obvious from reading the core source, write
+a throwaway test that asserts (or just dumps) what actually happens, run it once, record
+the fact where it matters — a code comment at the call site, a project invariant doc — and
+then delete the test. Don't leave diagnostic scaffolding in the suite.
+
+```php
+public function test_diagnose_variable_product_get_price(): void {
+    $parent = new WC_Product_Variable();
+    $parent->save();
+
+    // Dump instead of assert on the first run — you don't know the answer yet.
+    var_dump( $parent->get_price() ); // string(0) "" — not 0, not null
+    $this->fail( 'diagnostic only — delete this test once the behavior is confirmed' );
+}
+```
+
+Two facts this technique caught in one project that would otherwise have been assumed
+(and gotten wrong):
+
+- `WC_Product_Variable::get_price()` returns `''` (empty string) for the parent product —
+  it has no price of its own. `wc_get_price_excluding_tax( $product )` falls back to
+  `(float) $product->get_price()`, so it silently returns `0.0` unless an explicit
+  `'price'` arg is passed (e.g. `$product->get_variation_price( 'min' )`).
+- `DateTimeImmutable::getLastErrors()` returns `false` (not an empty array) when there is
+  nothing to report — a PHP 8.2+ behavior change. `new DateTimeImmutable( $raw )` alone
+  does not throw on a calendar-invalid date (`2026-02-30` silently normalizes to
+  `2026-03-02`); only checking `getLastErrors()` after construction catches it.
+
 Do not use `@expectedException` — it is removed in PHPUnit 10+.

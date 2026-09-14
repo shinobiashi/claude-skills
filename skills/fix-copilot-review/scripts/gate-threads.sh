@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+#
+# Helper for the fix-copilot-review skill (and any other workflow that needs
+# to fetch, reply to, and resolve GitHub PR review threads).
+#
+# Bundles fetching, replying to, and resolving unresolved review threads.
+# Hand-written GraphQL + `gh` glue for this tends to trip on the same three
+# things every time:
+#
+#   1. `gh pr comment --body "...(...)..."` breaks on zsh/bash parsing
+#      -> the body is only ever read from a file (or stdin)
+#   2. reply and resolve used to take independently-supplied IDs, and mixing
+#      up threads silently replied to one and closed another
+#      -> reply/done now take a single thread ID and derive everything else
+#   3. more than 50 threads need pagination
+#      -> list walks every page
+#
+# Usage:
+#   gate-threads.sh list <PR> [SINCE_ISO8601]           print unresolved threads as TSV
+#   gate-threads.sh show <THREAD_ID>                    print one thread's full body
+#   gate-threads.sh status <PR> [SINCE_ISO8601]         count unresolved threads per bot
+#   gate-threads.sh reply <PR> <THREAD_ID> <BODY_FILE|-> reply to a thread
+#   gate-threads.sh done <PR> <THREAD_ID> <BODY_FILE|->  reply, then resolve
+#
+#   --dry-run prints what a write command would do instead of doing it.
+#
+# Use `done` for findings you fixed, `reply` for findings you left open.
+# `done` will not resolve if the reply fails, so a thread is never closed
+# without an explanation. There is no standalone resolve command, because
+# that would let a thread be closed without a reply.
+#
+# `list` / `status` depend on `jq` (not bundled with `gh`).
+set -euo pipefail
+
+DRY_RUN=0
+ARGS=()
+for arg in "$@"; do
+	if [ "$arg" = "--dry-run" ]; then
+		DRY_RUN=1
+	else
+		ARGS+=( "$arg" )
+	fi
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+usage() {
+	sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
+	exit 64
+}
+
+[ $# -ge 1 ] || usage
+
+repo_slug() {
+	gh repo view --json nameWithOwner --jq '.nameWithOwner'
+}
+
+require_jq() {
+	command -v jq >/dev/null 2>&1 || {
+		echo "gate-threads: jq is required but was not found on PATH" >&2
+		exit 69
+	}
+}
+
+# Prints unresolved threads as TSV. SINCE, if given, restricts the output to
+# threads whose first comment came after it (this round's new findings) —
+# always pass it, since threads left open from a previous round are already
+# judged. Does not include the comment body (use `show` for that).
+cmd_list() {
+	local pr="${1:?PR number required}" since="${2:-}"
+	local slug owner repo cursor="null" page rc
+
+	require_jq
+	slug="$(repo_slug)"
+	owner="${slug%%/*}"
+	repo="${slug##*/}"
+
+	printf 'thread_id\tauthor\tpath\tline\turl\n'
+
+	while :; do
+		# A failing `gh` here would otherwise go unnoticed: this function runs
+		# inside `cmd_status`'s `rows="$(cmd_list ...)"`, and bash does not
+		# apply -e to a command substitution assigned to a variable, so a
+		# failure here would silently fall through to the next line instead
+		# of aborting. Check the exit status by hand instead.
+		page="$(gh api graphql -f query='
+			query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+			  repository(owner: $owner, name: $repo) {
+			    pullRequest(number: $pr) {
+			      reviewThreads(first: 50, after: $cursor) {
+			        pageInfo { hasNextPage endCursor }
+			        nodes {
+			          id isResolved path line
+			          comments(first: 1) {
+			            nodes { author { login } createdAt url }
+			          }
+			        }
+			      }
+			    }
+			  }
+			}' -F owner="$owner" -F repo="$repo" -F pr="$pr" -F cursor="$cursor" --jq '.data.repository.pullRequest.reviewThreads')"
+		rc=$?
+		[ "$rc" -eq 0 ] || { echo "gate-threads: gh api graphql failed (exit $rc)" >&2; return "$rc"; }
+
+		jq -r --arg since "$since" '
+			.nodes[]
+			| select(.isResolved == false)
+			| .c = .comments.nodes[0]
+			| select($since == "" or .c.createdAt > $since)
+			| [ .id, .c.author.login, (.path // "-"), (.line // "-" | tostring), .c.url ]
+			| @tsv
+		' <<<"$page"
+
+		[ "$(jq -r '.pageInfo.hasNextPage' <<<"$page")" = "true" ] || break
+		cursor="$(jq -r '.pageInfo.endCursor' <<<"$page")"
+	done
+}
+
+cmd_show() {
+	local thread_id="${1:?thread node id required}"
+
+	gh api graphql -f query='
+		query($id: ID!) {
+		  node(id: $id) {
+		    ... on PullRequestReviewThread {
+		      isResolved path line
+		      comments(first: 10) {
+		        nodes { databaseId author { login } createdAt url body }
+		      }
+		    }
+		  }
+		}' -F id="$thread_id" --jq '.data.node'
+}
+
+cmd_status() {
+	local pr="${1:?PR number required}" since="${2:-}"
+	local rows
+
+	rows="$(cmd_list "$pr" "$since")" || { echo "gate-threads: failed to list threads" >&2; return 1; }
+
+	printf '%s\n' "$rows" | tail -n +2 | awk -F'\t' '
+		{ n[$2]++; total++ }
+		END {
+			for ( a in n ) printf "%-34s %d\n", a, n[a]
+			printf "%-34s %d\n", "(unresolved total)", total + 0
+		}
+	'
+}
+
+read_body() {
+	local source="${1:?body file or - required}"
+
+	if [ "$source" = "-" ]; then
+		cat
+	else
+		[ -f "$source" ] || { echo "gate-threads: no such body file: $source" >&2; exit 66; }
+		cat "$source"
+	fi
+}
+
+# The REST replies endpoint targets a specific review comment, so this looks
+# up the thread's first comment and replies to that — the caller only ever
+# has to name the thread, which is what `done` resolves too.
+thread_first_comment_id() {
+	local thread_id="${1:?thread node id required}"
+
+	gh api graphql -f query='
+		query($id: ID!) {
+		  node(id: $id) {
+		    ... on PullRequestReviewThread {
+		      comments(first: 1) { nodes { databaseId } }
+		    }
+		  }
+		}' -F id="$thread_id" --jq '.data.node.comments.nodes[0].databaseId'
+}
+
+cmd_reply() {
+	local pr="${1:?PR number required}" thread_id="${2:?thread node id required}" source="${3:?body file or - required}"
+	local body slug comment_id
+
+	body="$(read_body "$source")"
+	[ -n "${body//[[:space:]]/}" ] || { echo "gate-threads: refusing to post an empty reply" >&2; exit 65; }
+
+	if [ "$DRY_RUN" = "1" ]; then
+		printf 'would reply to thread %s on PR #%s:\n%s\n' "$thread_id" "$pr" "$body"
+		return 0
+	fi
+
+	slug="$(repo_slug)"
+	comment_id="$(thread_first_comment_id "$thread_id")"
+
+	gh api "repos/$slug/pulls/$pr/comments/$comment_id/replies" -f body="$body" --jq '.html_url'
+}
+
+# Not exposed as a top-level command: always called from `cmd_done`, so a
+# thread can never be resolved without a reply having gone out first.
+cmd_resolve() {
+	local thread_id="${1:?thread node id required}" resolved
+
+	if [ "$DRY_RUN" = "1" ]; then
+		printf 'would resolve thread %s\n' "$thread_id"
+		return 0
+	fi
+
+	resolved="$(gh api graphql -f query='
+		mutation($id: ID!) {
+		  resolveReviewThread(input: { threadId: $id }) { thread { isResolved } }
+		}' -F id="$thread_id" --jq '.data.resolveReviewThread.thread.isResolved')"
+
+	[ "$resolved" = "true" ] || { echo "gate-threads: thread $thread_id is still unresolved" >&2; exit 70; }
+
+	printf 'resolved %s\n' "$thread_id"
+}
+
+# For findings you fixed. Does not resolve if the reply fails, so a thread is
+# never closed without an explanation.
+cmd_done() {
+	local pr="${1:?PR number required}" thread_id="${2:?thread node id required}" source="${3:?body file or - required}"
+	local body
+
+	body="$(read_body "$source")"
+
+	cmd_reply "$pr" "$thread_id" - <<<"$body"
+	cmd_resolve "$thread_id"
+}
+
+case "$1" in
+	list) shift; cmd_list "$@" ;;
+	show) shift; cmd_show "$@" ;;
+	status) shift; cmd_status "$@" ;;
+	reply) shift; cmd_reply "$@" ;;
+	done) shift; cmd_done "$@" ;;
+	*) usage ;;
+esac

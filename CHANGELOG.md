@@ -4,7 +4,19 @@
 
 ## [Unreleased]
 
+### Added
+- `fix-copilot-review`: `scripts/gate-threads.sh`（`dev-cycle` で実績のあるスレッド一覧・返信・
+  Resolve ヘルパーを移植）。返信本文を必ずファイル/stdin から渡すため `gh pr comment --body "..."`
+  のシェルエスケープ事故を防ぎ、`done`/`reply` がスレッド ID 1 つから返信先と Resolve 先の両方を
+  解決するため取り違えも防ぐ。50 件超のスレッドも自動でページングする
+- `wp-phpunit`: `references/wp-testcase-patterns.md` に「不確実なコア挙動を使い捨てテストで実測する」
+  手法の節を追加（実例: `WC_Product_Variable::get_price()` が親商品では `''` を返す、
+  `DateTimeImmutable::getLastErrors()` が PHP 8.2+ で「報告なし」を空配列ではなく `false` で返す）
+
 ### Changed
+- `fix-copilot-review`: スレッドの Resolve と PR への対応サマリコメント投稿を上記
+  `gate-threads.sh` 経由に統一（手順 6・7）。従来は Resolve の GraphQL mutation だけが例示され、
+  スレッドへの返信手段そのものが明文化されていなかった
 - `dev-cycle`: ゲートラウンドの TIMEOUT を「bot が指摘を出し尽くした」ではなく「応答が待ち時間より
   遅れているだけの可能性が高い」と明記（Codex・Copilot とも push から数時間かかった応答実績あり）。
   3 ラウンドで打ち切って先へ進む場合、状態は「収束」ではなく「未確認」と記録し、最終報告で
