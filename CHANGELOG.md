@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ### Changed
+- `dev-cycle`: ゲートラウンドの TIMEOUT を「bot が指摘を出し尽くした」ではなく「応答が待ち時間より
+  遅れているだけの可能性が高い」と明記（Codex・Copilot とも push から数時間かかった応答実績あり）。
+  3 ラウンドで打ち切って先へ進む場合、状態は「収束」ではなく「未確認」と記録し、最終報告で
+  `fix-copilot-review` による後日の再確認を案内するよう変更。修正がコアロジック層に及ぶ場合、
+  プロジェクト固有の機械的な不変条件チェックを commit 前に流す手順も追加（レビュー指摘の修正自体が
+  新しい規約違反を持ち込み、次のラウンドで指摘され返す事例があったため）
+- `fix-copilot-review`: 同様に、修正がコアロジック層に及ぶ場合はプロジェクト固有の機械的チェックを
+  commit 前に流す手順を追加
+- `fix-copilot-review`: Copilot の review 本文も指摘の取得元に追加。判定見出しが `Needs a closer look` のとき Copilot はインラインコメントを投稿せず（`Comments generated: 0 new`）、指摘を本文の `Suppressed comments`（`Previously missed` 含む）に畳むため、従来の `reviewThreads` だけの取得では取り逃がしていた。手順 2 を「2a スレッド / 2b レビュー本文 / 2c 早期終了判定」に分け、終了条件を「未解決スレッド 0 件 かつ 本文指摘 0 件」に変更。本文指摘は `B<k>` の連番で扱い、Resolve 対象が無いため対応サマリコメントに処理結果を必ず残す（再レビュー時の重複判断防止）。判定が `Needs a closer look` で指摘も無い場合は「人間の確認を求めている」として総評文を提示する
 - バージョン表記を 2026-09-09 時点に更新（WP 7.1 / WC 11.1.0、WPCS 3.4.1 + PHPCS 3.13.5、Playwright 1.63 / e2e-utils 1.54、`Tested up to: 7.1`、GitHub Actions を checkout@v7 / setup-node@v7 / cache@v6 / upload-artifact@v7 に）: `wp-github-actions`、`wp-phpcs`、`wp-e2e-playwright`、`wp-phpunit`、`wp-phpstan`、`wp-rest-api`、`wp-plugin-development`、`wp-wpcli-and-ops`、`wp-block-development`、`wp-abilities-api`、`wc-block-development`、`wp-org-release`、`payjp-v2-woocommerce`、`woo-marketplace-qit`（CI 例）
 - `wp-abilities-api`: WordPress/agent-skills trunk（d87ee69）の更新を取り込み。`references/php-registration.md` を新 API 形（`execute_callback`、必須 `permission_callback`、`meta.annotations`、`meta.mcp.public`、ID は `plugin/verb-noun`）に置換し、参照 7 本（domain-vs-projection、grouping-heuristic、shared-core-service、plugin-family-patterns、error-code-vocabulary、input-schema-gotchas、delegate-helper-pattern）を追加。ローカル加筆（6.9 でコア入り、JS パッケージ 2 種）は維持
 
