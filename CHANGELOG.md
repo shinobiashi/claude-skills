@@ -13,6 +13,12 @@
   手法の節を追加（実例: `WC_Product_Variable::get_price()` が親商品では `''` を返す、
   `DateTimeImmutable::getLastErrors()` が PHP 8.2+ で「報告なし」を空配列ではなく `false` で返す）
 
+### Fixed
+- `review-loop`: ソース側に反映されていなかった「R1/R2 で独立サブエージェントを併用する」手順を
+  取り込み、`~/.claude/skills/review-loop/SKILL.md`（installed）と再同期。installed 側が
+  2026-09-12 頃に直接手編集されソースより進んでいたため、`install.sh` を実行すると
+  この手順が失われる drift 状態になっていた（`install.sh --check` で検出）
+
 ### Changed
 - `fix-copilot-review`: スレッドの Resolve と PR への対応サマリコメント投稿を上記
   `gate-threads.sh` 経由に統一（手順 6・7）。従来は Resolve の GraphQL mutation だけが例示され、
