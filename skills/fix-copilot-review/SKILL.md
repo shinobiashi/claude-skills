@@ -75,10 +75,15 @@ S=<Base directory for this skill>/scripts/gate-threads.sh
 
 "$S" list <PR> [SINCE_ISO8601]              # 未解決スレッドを TSV で一覧（50件超も自動でページング）
 "$S" show <THREAD_ID>                        # 1件の全文を読む（評価に使う）
-"$S" status <PR> [SINCE_ISO8601]             # bot ごとの未解決件数
+"$S" status <PR> [SINCE_ISO8601]             # bot ごとの未解決件数 + 現 HEAD への Copilot レビュー本文の件数
+"$S" bodies <PR> [SINCE_ISO8601]             # 現 HEAD への Copilot レビュー本文（URL / 判定見出し / Suppressed comments）
 "$S" done  <PR> <THREAD_ID> <BODY_FILE|->    # 修正した指摘: 返信してから Resolve
 "$S" reply <PR> <THREAD_ID> <BODY_FILE|->    # 保留した指摘: 返信のみ（Resolve しない）
 ```
+
+`status` / `bodies` は系統 B（レビュー本文）の入口で、手順 2b の GraphQL を手書きせずに済む
+（`bodies` は HTML と File summaries の表を落として判定見出し・総評・`Suppressed comments` を
+そのまま表示する。`SINCE` は包含比較、対象は PR の現 HEAD への review のみ）。
 
 `--dry-run` を付けると書き込み系コマンドの実行内容だけを表示する。`done` は返信が失敗したら
 Resolve しない（説明のないままスレッドを閉じないため）。PR 本文への対応サマリコメント

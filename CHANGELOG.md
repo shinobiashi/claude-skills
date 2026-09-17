@@ -5,6 +5,19 @@
 ## [Unreleased]
 
 ### Added
+- `dev-cycle`: `scripts/request-gate-review.sh`（saai-points-wallet の `spw-dev-cycle` で 3 ラウンドの
+  bot ゲートを経て検証した版を汎用化）。Copilot の依頼登録を 3 系統の証拠（`requested_reviewers` の
+  不在→出現、timeline の `review_requested`、現 HEAD へのレビュー到着）で最大 5 分確認し、両 bot の
+  応答を提出時刻ではなく review の `commit_id` で判定する。`--request-codex` で "@codex review" も
+  投稿できる。Step 6 の手書き `gh` ループを置き換え、外側 timeout を 1,800,000ms に変更
+- `fix-copilot-review`: `gate-threads.sh bodies <PR> [SINCE]`（現 HEAD への Copilot レビュー本文を
+  URL / 判定見出し / Suppressed comments 付きで表示）と `status` の本文件数行。Copilot がスレッドを
+  立てず本文だけで指摘したレビューを、スレッドと同じ扱いで数えられる。`dev-cycle` の Step 7 も
+  この 2 コマンドを使い、Copilot の収束判定に「本文の指摘 0 件」を加えた
+- `fix-copilot-review` / `dev-cycle`（Fixed 相当）: `gh api --paginate` の出力を `jq -s` で結合してから
+  集計（ページごとの JSON になる場合に `0\n1` のような値を数値比較して誤判定していた）。オブジェクトを
+  返す端点（`requested_reviewers`）は平坦化しない。`SINCE` は包含比較（push と同一秒の応答を落とさない）、
+  `body: null` のレビューで一覧が失敗しない、jq 欠如時は即終了
 - `fix-copilot-review`: `scripts/gate-threads.sh`（`dev-cycle` で実績のあるスレッド一覧・返信・
   Resolve ヘルパーを移植）。返信本文を必ずファイル/stdin から渡すため `gh pr comment --body "..."`
   のシェルエスケープ事故を防ぎ、`done`/`reply` がスレッド ID 1 つから返信先と Resolve 先の両方を

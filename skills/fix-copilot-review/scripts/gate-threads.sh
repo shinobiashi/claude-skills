@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Helper for the fix-copilot-review skill (and any other workflow that needs
-# to fetch, reply to, and resolve GitHub PR review threads).
+# to fetch, reply to, and resolve GitHub PR review threads — dev-cycle's gate
+# rounds use it too).
 #
 # Bundles fetching, replying to, and resolving unresolved review threads.
 # Hand-written GraphQL + `gh` glue for this tends to trip on the same three
@@ -18,7 +19,10 @@
 # Usage:
 #   gate-threads.sh list <PR> [SINCE_ISO8601]           print unresolved threads as TSV
 #   gate-threads.sh show <THREAD_ID>                    print one thread's full body
-#   gate-threads.sh status <PR> [SINCE_ISO8601]         count unresolved threads per bot
+#   gate-threads.sh status <PR> [SINCE_ISO8601]         count unresolved threads per bot,
+#                                                       plus Copilot review bodies to read
+#   gate-threads.sh bodies <PR> [SINCE_ISO8601]         print Copilot review bodies of the current
+#                                                       head (URL, verdict headline, Suppressed comments)
 #   gate-threads.sh reply <PR> <THREAD_ID> <BODY_FILE|-> reply to a thread
 #   gate-threads.sh done <PR> <THREAD_ID> <BODY_FILE|->  reply, then resolve
 #
@@ -29,7 +33,15 @@
 # without an explanation. There is no standalone resolve command, because
 # that would let a thread be closed without a reply.
 #
-# `list` / `status` depend on `jq` (not bundled with `gh`).
+# Copilot does not always open a thread per finding: a "Needs a closer look"
+# or "Changes recommended" review can carry its findings only in the review
+# body (the headline sentence and a "Suppressed comments" section) with
+# zero inline threads (seen repeatedly in real PRs). `bodies` prints those
+# so a round can judge them like threads; `status` counts how many such
+# reviews arrived since SINCE so a "0 new threads" round is not mistaken
+# for convergence.
+#
+# `list` / `status` / `bodies` depend on `jq` (not bundled with `gh`).
 set -euo pipefail
 
 DRY_RUN=0
@@ -44,7 +56,7 @@ done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 usage() {
-	sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '3,44p' "$0" | sed 's/^# \{0,1\}//'
 	exit 64
 }
 
@@ -62,9 +74,11 @@ require_jq() {
 }
 
 # Prints unresolved threads as TSV. SINCE, if given, restricts the output to
-# threads whose first comment came after it (this round's new findings) —
-# always pass it, since threads left open from a previous round are already
-# judged. Does not include the comment body (use `show` for that).
+# threads whose first comment came at or after it (this round's new
+# findings) — always pass it, since threads left open from a previous round
+# are already judged. The cutoff is inclusive: SINCE is the push time at
+# second precision, and a bot comment in that same second still belongs to
+# this round. Does not include the comment body (use `show` for that).
 cmd_list() {
 	local pr="${1:?PR number required}" since="${2:-}"
 	local slug owner repo cursor="null" page rc
@@ -105,7 +119,7 @@ cmd_list() {
 			.nodes[]
 			| select(.isResolved == false)
 			| .c = .comments.nodes[0]
-			| select($since == "" or .c.createdAt > $since)
+			| select($since == "" or .c.createdAt >= $since)
 			| [ .id, .c.author.login, (.path // "-"), (.line // "-" | tostring), .c.url ]
 			| @tsv
 		' <<<"$page"
@@ -131,9 +145,62 @@ cmd_show() {
 		}' -F id="$thread_id" --jq '.data.node'
 }
 
+# Copilot reviews of the PR's current head submitted after SINCE, as JSON
+# lines ({id, url, submitted_at, commit, headline, has_findings, body}).
+# Filtered by commit_id as well as time, for the same reason the gate wait matches
+# responses by commit: a delayed review of an *older* push can land after
+# SINCE and would otherwise count as this round's findings.
+# `headline` is the verdict line ("### 🟡 Changes recommended");
+# `has_findings` is true when the body carries a Suppressed comments section
+# or a non-approving verdict, i.e. when there is something a round must read
+# even with zero threads. `--paginate` pages are flattened with `jq -s`.
+# A review with no summary body has `body: null`; it is normalized to ""
+# so the parsing never aborts the whole listing.
+copilot_reviews() {
+	local pr="${1:?PR number required}" since="${2:-}" slug head_sha
+
+	require_jq
+	slug="$(repo_slug)"
+	head_sha="$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')"
+
+	gh api --paginate "repos/$slug/pulls/$pr/reviews" | jq -c -s --arg since "$since" --arg head "$head_sha" '
+		[.[][]]
+		| .[]
+		| select(.user.login == "copilot-pull-request-reviewer[bot]")
+		| select(.commit_id == $head)
+		| select($since == "" or .submitted_at >= $since)
+		| .body = (.body // "")
+		| {
+			id,
+			url: .html_url,
+			submitted_at,
+			commit: .commit_id[0:7],
+			headline: ((.body | [match("###[^\n]*")] | .[0].string) // "(no headline)"),
+			has_findings: ((.body | test("Suppressed comments \\(")) or (.body | test("Changes recommended|Needs a closer look"))),
+			body
+		}'
+}
+
+# Prints each Copilot review body (current head, since SINCE) with the HTML
+# and the file summary table stripped, so the verdict, its sentence and the
+# Suppressed comments read like a thread. The review URL is printed so a
+# body-only finding can be cited in G<n>.md, where a thread URL would go.
+cmd_bodies() {
+	local pr="${1:?PR number required}" since="${2:-}" line
+
+	copilot_reviews "$pr" "$since" | while IFS= read -r line; do
+		jq -r '"=== review \(.id) \(.submitted_at) \(.commit) has_findings=\(.has_findings) ===\n\(.url)"' <<<"$line"
+		jq -r '.body' <<<"$line" \
+			| sed -e 's/<[^>]*>//g' \
+			| grep -v -e '^|' -e 'Get a fresh assessment' -e '^💡' -e '^[[:space:]]*$' \
+			|| true
+		echo
+	done
+}
+
 cmd_status() {
 	local pr="${1:?PR number required}" since="${2:-}"
-	local rows
+	local rows bodies
 
 	rows="$(cmd_list "$pr" "$since")" || { echo "gate-threads: failed to list threads" >&2; return 1; }
 
@@ -144,6 +211,9 @@ cmd_status() {
 			printf "%-34s %d\n", "(unresolved total)", total + 0
 		}
 	'
+
+	bodies="$(copilot_reviews "$pr" "$since" | jq -s '{ reviews: length, with_findings: (map(select(.has_findings)) | length) }')" || { echo "gate-threads: failed to read Copilot reviews" >&2; return 1; }
+	printf '%-34s %s\n' "copilot review bodies (head, since)" "$(jq -r '"\(.reviews) reviews, \(.with_findings) with findings to read — see: bodies"' <<<"$bodies")"
 }
 
 read_body() {
@@ -227,6 +297,7 @@ case "$1" in
 	list) shift; cmd_list "$@" ;;
 	show) shift; cmd_show "$@" ;;
 	status) shift; cmd_status "$@" ;;
+	bodies) shift; cmd_bodies "$@" ;;
 	reply) shift; cmd_reply "$@" ;;
 	done) shift; cmd_done "$@" ;;
 	*) usage ;;

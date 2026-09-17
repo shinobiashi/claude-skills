@@ -214,36 +214,43 @@ timeout は 600000ms。
 
 ### Step 6. bot へのレビュー依頼と待ち
 
-対象は「未収束 かつ 依頼回数 < 3」の bot のみ。依頼直前の UTC 時刻 `T` と HEAD sha を記録する。
+対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**に記録した UTC 時刻 `T`(Step 4 の
+初回 push、または前ラウンドの修正 push の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)`)を
+`--since` で渡す。依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
+(手書きの `gh` ループに戻さない。理由は後述):
 
 ```bash
-T=$(date -u +%Y-%m-%dT%H:%M:%SZ); echo "$T"
-gh pr edit <N> --add-reviewer @copilot            # Copilot
-gh pr comment <N> --body "@codex review"          # Codex(push 時の自動レビューが有効でないリポジトリのみ)
+R=<Base directory for this skill>/scripts/request-gate-review.sh
+
+"$R" <N> --since <T>                        # Copilot 依頼 + 両 bot の応答待ち(Codex は push 時の自動レビューを待つ)
+"$R" <N> --since <T> --request-codex        # Codex の自動レビューが無いリポジトリ: "@codex review" も投稿する
+"$R" <N> --since <T> --copilot-only         # Codex が収束済み
+"$R" <N> --since <T> --codex-only           # Copilot が収束済み
 ```
 
-- Codex の自動レビュー(push で自動起動する設定)が有効なリポジトリでは `@codex review` を投稿せず、
-  push 後の自動レビューを応答として待つ。有効かどうかは CLAUDE.md の記載や過去 PR のコメントで判断する
+Codex の自動レビュー(push で自動起動する設定)が有効かどうかは CLAUDE.md の記載や過去 PR の
+コメントで判断する(有効なリポジトリで `@codex review` を投稿しても「Codex アカウントを接続して」
+という案内が返るだけ)。
 
-待ちは Bash `run_in_background`(timeout 960000ms)。応答の定義:
+Bash `run_in_background`、**timeout 1800000ms**(登録確認 最大 2 回 × 300 秒 + 応答待ち 900 秒 ≒
+最悪 1,530 秒。短いと登録が遅れたケースでスクリプトが `DONE` / 終了コードを出す前に殺される)。
 
-- Copilot: `pulls/<N>/reviews` に `copilot-pull-request-reviewer[bot]` の `submitted_at > T` の review
-- Codex: 同 reviews に `chatgpt-codex-connector[bot]` の review、**または** `issues/<N>/comments` に
-  同 bot の `created_at > T` のコメント(指摘なしの場合は "Didn't find any major issues" のコメントのみ)
+スクリプトがやること:
 
-```bash
-N=<PR番号>; T=<記録した時刻>; WAIT_COPILOT=1; WAIT_CODEX=1   # 依頼しなかった bot は 0
-deadline=$((SECONDS+900))
-until [ $SECONDS -ge $deadline ]; do
-  c=$(gh api "repos/{owner}/{repo}/pulls/$N/reviews" --jq "[.[] | select(.user.login==\"copilot-pull-request-reviewer[bot]\" and .submitted_at > \"$T\")] | length" 2>/dev/null || echo 0)
-  x=$(gh api "repos/{owner}/{repo}/pulls/$N/reviews" --jq "[.[] | select(.user.login==\"chatgpt-codex-connector[bot]\" and .submitted_at > \"$T\")] | length" 2>/dev/null || echo 0)
-  xc=$(gh api "repos/{owner}/{repo}/issues/$N/comments?since=$T" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length' 2>/dev/null || echo 0)
-  echo "copilot=$c codex=$((x+xc))"
-  [ "$WAIT_COPILOT" -eq 0 -o "$c" -ge 1 ] && [ "$WAIT_CODEX" -eq 0 -o $((x+xc)) -ge 1 ] && { echo DONE; exit 0; }
-  sleep 60
-done
-echo TIMEOUT; exit 1
-```
+- Copilot への依頼は `gh api ... requested_reviewers` が成功を返しても実際には登録されないことがあり、
+  逆に登録されていても issue timeline API への反映が数分遅れる。そのため **3 系統の証拠**
+  (`pulls/<N>/requested_reviewers` に Copilot が現れる〈POST 前に不在だった場合のみ〉/ timeline の
+  `review_requested` イベント / 現 HEAD への Copilot レビュー到着)のいずれかを最大 5 分ポーリングして
+  登録を確認してから待つ。exit 2(未登録)が出たら、再依頼の前に `gh pr view <N> --json reviews` と
+  timeline を自分で確認する
+- 応答の判定は提出時刻ではなく **review の `commit_id` が現 HEAD と一致するか**で行う(両 bot とも
+  1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある)。Codex は加えて
+  `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")も応答と見なす
+- `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
+  `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
+
+終了コード: `0` 応答あり / `1` TIMEOUT / `2` Copilot の依頼が登録されなかった(Codex を待っていれば
+その応答は待ってから 2 になる)。
 
 TIMEOUT なら「人間に確認する条件」(再依頼 / 待たずに進める / 中断)。**TIMEOUT は「bot が
 使えない/指摘を出し尽くした」ことを意味しない**(応答が Step 6 の待ち時間より遅れているだけの
@@ -256,32 +263,36 @@ TIMEOUT なら「人間に確認する条件」(再依頼 / 待たずに進め�
 
 ラウンド番号 n は Step 6 の依頼回数(両 bot 共通)。記録は `docs/reviews/<ブランチ>/G<n>.md`。
 
-**1. 未解決スレッドの取得**(REST は resolved 状態を返さないため GraphQL):
+**1. 未解決スレッドと Copilot レビュー本文の取得**(REST は resolved 状態を返さないため GraphQL。
+`fix-copilot-review` スキル同梱の `gate-threads.sh` が問い合わせ・返信・Resolve をまとめて持っているので
+手書きしない。返信・Resolve・PR コメントの本文は必ずファイルか stdin で渡す):
 
 ```bash
-gh api graphql -f query='
-query {
-  repository(owner: "<OWNER>", name: "<REPO>") {
-    pullRequest(number: <N>) {
-      reviewThreads(first: 50) {
-        nodes {
-          id isResolved isOutdated path line
-          comments(first: 10) { nodes { databaseId body author { login } createdAt url } }
-        }
-      }
-    }
-  }
-}'
+S=~/.claude/skills/fix-copilot-review/scripts/gate-threads.sh
+
+"$S" list <N> <T>             # 今回の新規指摘だけを TSV(thread_id / author / path / line / url)で
+"$S" show <THREAD_ID>         # 1 件の本文を読む
+"$S" status <N> <T>           # bot ごとの件数 + 現 HEAD への Copilot レビュー本文の件数(収束判定用)
+"$S" bodies <N> <T>           # 現 HEAD への Copilot レビュー本文(URL / 判定見出し / Suppressed comments)
+"$S" done  <N> <THREAD_ID> reply.md   # 修正した指摘: 返信してから Resolve
+"$S" reply <N> <THREAD_ID> reply.md   # 保留した指摘: 返信のみ(Resolve しない)
 ```
 
-- `isResolved: false` かつ最初のコメントの `createdAt > T` かつ author が bot
-  (GraphQL の login は `copilot-pull-request-reviewer` / `chatgpt-codex-connector`)のものを
-  **今回の新規指摘**とし、`G<n>-<k>` の ID を振る(bot 名を併記)
+- `<T>` は Step 6 で `--since` に渡した push 直前の時刻。`list` は「最初のコメントが `T` 以降
+  (包含)の未解決スレッド」= 今回の新規指摘に絞り、ページングは最後まで辿る。author が bot
+  (GraphQL の login は `copilot-pull-request-reviewer` / `chatgpt-codex-connector`)のものに
+  `G<n>-<k>` の ID を振る(bot 名を併記)
+- **Copilot はスレッドを立てずにレビュー本文だけで指摘することがある**(`### 🔵 Needs a closer look` /
+  `### 🟡 Changes recommended` の見出し文と `Suppressed comments (N)`。`Comments generated: 0 new`
+  でも本文に指摘が残る)。`status` の `copilot review bodies (head, since)` が `with findings` 1 件以上
+  なら `bodies` で本文を読み、スレッドと同じく `G<n>-<k>` を振って仕分ける。返信先スレッドが無いので
+  対応結果は PR のラウンドサマリコメントと `G<n>.md` に書く(Resolve 対象も無い)
 - 前ラウンドで保留にした未解決スレッドは対象外(判断済み)。人間が ID で指示した時だけ対象に戻す
 - 人間のレビュアーのコメントがあれば「人間に確認する条件」
-- 50 件を超える場合は `after` カーソルで全件取得する
 
-**2. 収束判定**: 新規指摘が 0 件の bot は**収束**とし、以降その bot には依頼しない。
+**2. 収束判定**: 新規指摘が 0 件の bot は**収束**とし、以降その bot には依頼しない。Copilot は
+「新規スレッド 0 件」だけでは収束にしない — `status` の本文件数が `with findings` 0 件(または本文を
+読んで既出・対応済みの指摘しか無い)ことを合わせて確認する。
 
 **3. 仕分け**(レビュー基準(「プロジェクト設定の読み取り」参照)の重大度で自分で再判定する。
 bot の重大度を鵜呑みにしない。該当ファイルと周辺コードを読み、指摘が妥当か検証してから決める):
