@@ -5,6 +5,19 @@
 ## [Unreleased]
 
 ### Added
+- `wc-wp-env`: WooCommerce 拡張のリポジトリに wp-env 環境を「構築」する新スキル（jp4wc-rakusync の
+  Phase 0 と saai-points-wallet の `bin/wp-env-setup.sh` を汎用化）。`scripts/find-free-ports.js` が
+  兄弟リポジトリの `.wp-env.json` と LISTEN 中のポートから衝突しない組を割り当て、
+  `templates/wp-env-setup.sh` が店舗を冪等に初期構築し（HPOS・日本/JPY・決済・送料・サンプルデータ。
+  ホストから呼ばれたら自身をコンテナ内で 1 回だけ再実行する）、`scripts/verify-env.sh` が完了条件
+  （HTTP 応答・プラグイン有効化・`debug.log` の Fatal・プロビジョニング・HPOS）を判定する。
+  使い捨てプラグインで構築→検証→撤去まで実測（@wordpress/env 11.15.0 / WP 7.1.1 / WC 11.1.1）。
+  実測で確定した事項を `references/troubleshooting.md` に記録: `Requires Plugins` を宣言したプラグインを
+  WooCommerce より前に並べると `wp-env start` が exit 1 で環境ごと立ち上がらない／`wp plugin activate`
+  だけで作った店舗は HPOS=no／`wp wc hpos enable --for-new-shop` はデータがあると失敗する／
+  `wp-env destroy` は共有 Docker イメージまで消すので作り直しは `cleanup`／`env.tests` は 11.15 で
+  非推奨だが `wp-phpunit`・`wp-e2e-playwright`・`woo-marketplace-qit` が `tests-cli` と 8889 を
+  前提にしているため当面維持
 - `dev-cycle`: `scripts/request-gate-review.sh`（saai-points-wallet の `spw-dev-cycle` で 3 ラウンドの
   bot ゲートを経て検証した版を汎用化）。Copilot の依頼登録を 3 系統の証拠（`requested_reviewers` の
   不在→出現、timeline の `review_requested`、現 HEAD へのレビュー到着）で最大 5 分確認し、両 bot の
