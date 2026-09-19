@@ -325,27 +325,67 @@ woocommerce_store_api_register_update_callback( array(
 
 ### メニュー配置
 
-トップレベルメニューの作成は禁止。WooCommerce の既存メニュー構造に統合する:
+トップレベルメニューの作成は禁止（拡張であればナビゲーション・設定は WooCommerce の既存メニュー
+構造に 99.9% 収まるはず）。**「設定画面」と「設定を伴わない管理画面」を区別する**（審査で頻出の
+指摘。公式 UX Guidelines: developer.woocommerce.com/docs/extensions/ux-guidelines-extensions/navigation/）:
+
+- **設定画面**（プラグインの動作を構成する画面）は `WooCommerce > Settings` の適切なタブに置く。
+  既存タブに合わず、サブタブとしても不適切な場合に限り新しいトップレベル設定タブを作る
+- **設定を伴わない管理画面**（データの一覧・管理画面。例: 予約枠の一覧、注文に紐づく追加データの管理）
+  は `WooCommerce` メニュー配下のサブメニューでよい
 
 ```php
-// OK: WooCommerce サブメニュー
+// OK: 設定を伴わないデータ管理画面 → WooCommerce サブメニュー
 add_action( 'admin_menu', function() {
     add_submenu_page(
         'woocommerce',
-        __( 'My Extension Settings', 'my-extension' ),
+        __( 'My Extension', 'my-extension' ),
         __( 'My Extension', 'my-extension' ),
         'manage_woocommerce',
         'my-extension',
-        'render_settings_page'
+        'render_data_page'
     );
 });
 
-// OK: WooCommerce Settings タブ
-add_filter( 'woocommerce_settings_tabs_array', function( $tabs ) {
-    $tabs['my_extension'] = __( 'My Extension', 'my-extension' );
-    return $tabs;
-}, 50 );
+// NG: 設定画面を独自サブメニューに置く（Points and Rewards 等の旧来プラグインに見られるが、
+// 現行ガイドラインには違反する。審査で指摘される）
+add_action( 'admin_menu', function() {
+    add_submenu_page( 'woocommerce', 'My Extension Settings', 'My Extension', 'manage_woocommerce', 'my-extension-settings', 'render_settings_page' );
+});
+
+// OK: 設定画面 → WooCommerce Settings タブ（WC_Settings_Page 経由、現行 API。
+// General/Shipping 等コア自身の設定タブもすべてこの仕組みで動いている）
+class My_Extension_Settings_Page extends WC_Settings_Page {
+    public function __construct() {
+        $this->id    = 'my_extension';
+        $this->label = __( 'My Extension', 'my-extension' );
+        parent::__construct(); // タブ表示・セクション出力・保存の各フックをここで自動登録する
+    }
+    // get_settings_for_default_section() で設定配列を返せば
+    // WC_Admin_Settings::output_fields() が描画・保存を行う。
+    // 独自の React 等でマウントポイントだけ出す場合は output() を override し、
+    // $GLOBALS['hide_save_button'] = true を立てて WC 標準の「Save changes」
+    // ボタンとの二重表示を防ぐ（WooCommerce コア自身のモダン設定 UI も同じ仕組み）。
+}
+add_filter( 'woocommerce_get_settings_pages', function( $pages ) {
+    $pages[] = new My_Extension_Settings_Page();
+    return $pages;
+});
 ```
+
+**落とし穴（実プラグインで実際に踏んだ）**: `WC_Settings_Page` は WooCommerce 自身が
+`WC_Admin_Settings::get_settings_pages()` の中でしか `include_once` しない。このメソッドを呼ぶのは
+`admin_init` / `rest_api_init`（`WC()->register_wp_admin_settings()`）や設定画面の `load-*` フック
+（`class-wc-admin-menus.php` の `settings_page_init()`）などで、いずれも `plugins_loaded` より後
+（WooCommerce 11.1 のソースで確認）。このクラスを継承したサブクラスを `plugins_loaded` や `init` など
+早いタイミングで直接 `new` すると、本番環境でも `Class "WC_Settings_Page" not found` で fatal する
+（DI コンテナのシングルトンを起動時に解決する設計だと踏みやすい）。安全にするには、上記の例のように
+`woocommerce_get_settings_pages` フィルタの**コールバック本体の中で初めて** `new` する（フィルタ登録
+自体は早くても安全 — `add_filter()` はコールバックを呼ばずに保存するだけなので、参照先クラスの
+オートロードを引き起こさない）。
+
+古い `woocommerce_settings_tabs_array` フィルタだけでタブ名を追加する方法もまだ動くが、これは
+タブ表示だけで保存・セクション処理を自分で用意する必要があるため非推奨。`WC_Settings_Page` を使う。
 
 ### やってはいけないこと
 
@@ -354,6 +394,7 @@ add_filter( 'woocommerce_settings_tabs_array', function( $tabs ) {
 - マーケットプレイス外へのアップセルリンク、アフィリエイトリンク、スパムリンク
 - 初回起動時のレビュー依頼（セットアップ完了・一定期間使用後に表示する）
 - コアインターフェースの見た目の変更（コンテナの形状変更など）
+- 設定画面を `WooCommerce > Settings` タブではなく独自のサブメニュー・トップレベルメニューに置く
 
 ### 心がけること
 

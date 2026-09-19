@@ -44,6 +44,19 @@
   取り込み、`~/.claude/skills/review-loop/SKILL.md`（installed）と再同期。installed 側が
   2026-09-12 頃に直接手編集されソースより進んでいたため、`install.sh` を実行すると
   この手順が失われる drift 状態になっていた（`install.sh --check` で検出）
+- `woo-marketplace-extension`: 「メニュー配置」節が「WooCommerce サブメニュー」と「WooCommerce
+  Settings タブ」のどちらも単に "OK" とだけ示しており、**設定画面は Settings タブに置かなければ
+  ならず、サブメニューは設定を伴わないデータ管理画面専用**という公式 UX Guidelines の区別を
+  読み手に伝えられていなかった（実プラグインの実装で見落とし、審査前に手動で発覚）。設定画面用の
+  例を `WC_Settings_Page` + `woocommerce_get_settings_pages`（現行 API。旧来の
+  `woocommerce_settings_tabs_array` だけの例はタブ表示のみで保存処理が無いため非推奨として残した）
+  に差し替え、NG 例と「やってはいけないこと」の1行を追加。あわせて、`WC_Settings_Page` は
+  WooCommerce が `WC_Admin_Settings::get_settings_pages()` の中（呼ばれるのは `admin_init` /
+  `rest_api_init` / 設定画面の `load-*` フックなど、いずれも `plugins_loaded` より後。WC 11.1 のソースで
+  確認）でしか `include_once` しないため `plugins_loaded` 等の早い
+  タイミングで直接 `new` すると本番でも fatal する落とし穴（DI コンテナのシングルトン解決で踏みやすい）
+  と、その回避策（`woocommerce_get_settings_pages` フィルタのコールバック本体の中で初めて `new` する）
+  を明記した
 
 ### Changed
 - `post-merge`: 手順 6 の `/rename`・`/export` の提案に補足を追加。(1) どちらもユーザー個人の参照用で
