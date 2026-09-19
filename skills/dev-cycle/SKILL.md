@@ -3,7 +3,8 @@ name: dev-cycle
 description: >
   WordPress / WooCommerce プラグイン開発向けの開発サイクル司令塔。「計画(plan mode)→ ブランチ作成 →
   実装 → review-loop → push・PR 作成 → CI 待ち → Codex/Copilot ゲート(bot ごとに最大3ラウンド)→
-  最終報告」を1コマンドで通す。
+  最終報告」を1コマンドで通す。`sequential` を付けると Codex → Copilot → Codex … と1体ずつ順番にゲートを回す
+  (既定は同時依頼)。
   「dev-cycle」「次の開発を進めて」「Phase N を実装して PR まで」「サイクルを再開して」「G2-3 を直して」
   などと言われたら使う。人間の判断が必要な場面(計画の承認・各ゲートラウンドの commit 判断・想定外の
   事象)では必ず停止して確認し、勝手に重要な判断をしない。
@@ -50,6 +51,9 @@ description: >
 - `fix <ID>...`(例: `fix G1-2 G2-1`)— 最終報告後に、保留にした指摘を人間の判断で修正する
 - `auto-commit` — Step 7 の確認ゲートを飛ばし、各ラウンドの修正を自動で commit/push する。
   **デフォルトは確認ゲートあり**。ユーザーが明示した時のみ使う
+- `sequential` — Codex と Copilot を同じラウンドで同時に依頼せず、**1 体ずつ順番に**回す
+  (Codex → Copilot → Codex → … 各 bot 最大 3 回)。前の bot の修正が入った HEAD を次の bot がレビューする。
+  詳細は「順番実行」節。**デフォルトは同時依頼**
 
 ## 前提: commit / push / PR 作成の権限
 
@@ -120,6 +124,7 @@ review-loop / PR:
 - 現在のステップ: 7(ゲート G2・確認ゲート待ち)
 - Copilot: 依頼 2 回 / 未収束
 - Codex: 依頼 1 回 / 収束(G1 で新規指摘なし)
+- 次のターン: Copilot 3 回目(`sequential` の時のみ)
 
 ## ログ
 | 日時(JST) | ステップ | 内容 |
@@ -214,6 +219,8 @@ timeout は 600000ms。
 
 ### Step 6. bot へのレビュー依頼と待ち
 
+`sequential` 指定時は本節の同時依頼ではなく、下の「順番実行」節に従う。
+
 対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**に記録した UTC 時刻 `T`(Step 4 の
 初回 push、または前ラウンドの修正 push の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)`)を
 `--since` で渡す。依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
@@ -261,7 +268,7 @@ TIMEOUT なら「人間に確認する条件」(再依頼 / 待たずに進め�
 
 ### Step 7. ゲートラウンド G<n>(ゲート: 確認ゲート)
 
-ラウンド番号 n は Step 6 の依頼回数(両 bot 共通)。記録は `docs/reviews/<ブランチ>/G<n>.md`。
+ラウンド番号 n は Step 6 の依頼回数(両 bot 共通。`sequential` 時は通しのターン番号)。記録は `docs/reviews/<ブランチ>/G<n>.md`。
 
 **1. 未解決スレッドと Copilot レビュー本文の取得**(REST は resolved 状態を返さないため GraphQL。
 `fix-copilot-review` スキル同梱の `gate-threads.sh` が問い合わせ・返信・Resolve をまとめて持っているので
@@ -343,7 +350,7 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<THRE
 
 **8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8。それ以外は Step 5 へ
 戻り、CI green 後に未収束 bot へ再依頼する(Step 6)。3 回目の依頼に対する修正は push して CI を
-待つが、**再依頼はしない**。
+待つが、**再依頼はしない**。`sequential` 時は、次にどの bot へ依頼するかを「順番実行」節で決める。
 
 `G<n>.md` のフォーマット:
 
@@ -379,6 +386,40 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<THRE
 
 保留分を1件ずつ対話的に見直したい場合は `/fix-copilot-review <N>` も使える(bot 由来の未解決スレッドを
 すべて対象にし、対応不要と判断したものを AskUserQuestion で確認する)。
+
+## 順番実行(`sequential` 指定時)
+
+既定の同時依頼は、1 ラウンドで両 bot に依頼して両方の指摘をまとめて直す。同じ箇所を別々に指摘されて二重に
+直しがちで、後から来た bot は直る前のコードを見ている。`sequential` は **1 体ずつ、前の bot の修正が入った HEAD を
+次の bot に見せる**。Step 6〜8 の同時依頼をこの流れに置き換える(Step 0〜5・8 と「絶対にしないこと」「人間に確認する条件」は
+そのまま有効)。
+
+**順序**: Codex → Copilot → Codex → Copilot → Codex → Copilot(各 bot 最大 3 回、合計最大 6 ターン)。
+
+**1 ターン** = 1 体の bot に対する「Step 5 CI 待ち → Step 6 依頼・待ち → Step 7 仕分け・修正・確認ゲート・
+commit/push・GitHub への反映」。**ターンが完結してから次のターンに進み、他の bot への依頼を先に出さない。**
+
+- **依頼はそのターンの bot だけ**:
+  ```bash
+  "$R" <N> --since <T> --codex-only --request-codex   # Codex のターン(--request-codex は Codex が push で自動レビューしないリポジトリ用)
+  "$R" <N> --since <T> --copilot-only                 # Copilot のターン
+  ```
+  Bash は Step 6 と同じく `run_in_background`・timeout 1800000ms
+- **`<T>`** は、現在の HEAD を作った直近の push の直前時刻。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
+- **対象スレッドの絞り込み**: `gate-threads.sh list` / `status` は全 bot のスレッドを返す。そのターンの bot の author
+  (Codex: `chatgpt-codex-connector`、Copilot: `copilot-pull-request-reviewer`)だけを対象にする。`bodies` は Copilot のターンだけ読む。
+  他の bot が前のターンで保留にして未解決のまま残したスレッドは判断済みなので対象外
+- **記録**: ターン番号 n は通しの連番(G1 = 1 ターン目)。`G<n>.md` の見出しの下に `- bot: Codex(2 回目)` のように書く。
+  指摘 ID は `G<n>-<k>`。状態ファイルには各 bot の依頼回数と「次のターン」を書く
+- **次のターンの bot** は順序で次の bot。ただし次のいずれかなら飛ばして、その次の bot にする:
+  - 収束済み(新規指摘が 0 件だった)
+  - 依頼回数が 3 に達した
+  - その bot が最後にレビューした HEAD から変わっていない(同じ HEAD への再依頼は同じ指摘を返すだけ)
+- **終了**: 飛ばされずに残る bot がいなくなったら Step 8 へ。片方の bot だけが残った場合は、その bot が
+  CI 待ちを挟みながら続けてターンを取る。最後のターンの修正は push して CI を待つが、再依頼はしない(既定と同じ)
+- **確認ゲート**(Step 7-5)は既定と同じくターンごと。`auto-commit` で飛ばせる
+- **TIMEOUT・Copilot の依頼が登録されない場合**の扱いは既定と同じ。TIMEOUT で「待たずに進める」を選んだ時は、
+  その bot を「未確認」として記録し、依頼回数には数えたまま次のターンへ進む
 
 ## 報告フォーマット
 

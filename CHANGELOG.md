@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Added
+- `dev-cycle`: 引数 `sequential`（任意）を追加。Codex と Copilot を同じラウンドで同時に依頼する既定の流れに対し、
+  Codex → Copilot → Codex → … と 1 体ずつ順番に回し、前の bot の修正が入った HEAD を次の bot にレビューさせる
+  （各 bot 最大 3 回。収束済み・上限到達・HEAD 不変の bot は飛ばす）。既定は従来どおり同時依頼で、他プロジェクトへの影響なし。
+  `request-gate-review.sh` の既存の `--codex-only` / `--copilot-only` を使うのでスクリプトの変更は無い。
 - `wc-wp-env`: WooCommerce 拡張のリポジトリに wp-env 環境を「構築」する新スキル（jp4wc-rakusync の
   Phase 0 と saai-points-wallet の `bin/wp-env-setup.sh` を汎用化）。`scripts/find-free-ports.js` が
   兄弟リポジトリの `.wp-env.json` と LISTEN 中のポートから衝突しない組を割り当て、
