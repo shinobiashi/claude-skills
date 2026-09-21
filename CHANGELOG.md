@@ -78,6 +78,13 @@
   なお当初 installed 側（`~/.claude/skills/post-merge/`）へ直接編集してしまい drift を作ったため、
   同じ内容をソースへ移植して再同期した（`review-loop` の 2026-09-12 の件と同じ事故。
   スキル実行時に表示される "Base directory" が installed 側を指すので編集先を誤認しやすい）
+- `post-merge`: 手順 3・4 に 3 点を追記。(1) squash / rebase マージのブランチは `--merged` に出ず
+  `git branch -d` が "not fully merged" で拒否されるため、PR が `MERGED`・ブランチ先端と本流のツリーが同一・
+  未 push のコミットが無い、の 3 点をすべて確認してから承認を取って `-D` を提案する、(2) リモートブランチは
+  GitHub の自動削除で既に無いことが多いので、`git push origin --delete` の前に `git ls-remote --heads` で
+  存在を確認する、(3) リポジトリに `.claude/rules/*.md` がある場合は領域固有の落とし穴をそちらへ追記し、
+  CLAUDE.md を再び肥大化させない。なおこれも installed 側へ直接編集して drift を作った後にソースへ移植した
+  （直前の項目と同じ事故の再発）
 - `fix-copilot-review`: スレッドの Resolve と PR への対応サマリコメント投稿を上記
   `gate-threads.sh` 経由に統一（手順 6・7）。従来は Resolve の GraphQL mutation だけが例示され、
   スレッドへの返信手段そのものが明文化されていなかった

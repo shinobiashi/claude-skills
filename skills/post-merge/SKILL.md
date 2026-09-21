@@ -31,8 +31,18 @@ PRがマージされたら「そのタスクは完了」。次のタスクにき
 ### 3. マージ済みブランチとworktreeを片付ける（承認必須）
 - `git branch --merged <default>` で対象がマージ済みか確認する（フォーク運用では `--merged upstream/<default>`）。
 - マージ済みなら削除を提案 → 承認後に `git branch -d <branch>`。マージ済みでなければ削除せず、その旨を報告。
+- **squash / rebase マージのブランチは `--merged` に出ず、`-d` が「not fully merged」で拒否される**（コミットが本流に別のハッシュで入るため）。
+  この場合は次の**3点をすべて確認**してから、承認を取って `git branch -D` を提案する（1つでも欠けたら削除しない）:
+  1. `gh pr view <PR> --json state,mergeCommit` が `MERGED`（マージコミットの sha を控える）
+  2. **ブランチ先端と本流のツリーが同一**: `git diff --stat <branch> <default>` が空、または `git rev-parse <branch>^{tree} <default>^{tree}` が一致
+     （マージ後に本流へ別のコミットが入っていて差分が出る場合は、差分が「後から本流に入った変更だけ」であることを `git log <branch>..<default>` で確認）
+  3. **未 push のコミットが無い**: `git log origin/<branch>..<branch>` が空（リモートを既に消していると失敗するので、その場合は
+     `git log <default>..<branch>` で本流に無いコミットが無いことを確認）
 - `git worktree list` を確認し、対象ブランチに紐づく worktree があれば削除を提案 → 承認後に `git worktree remove <path>`。（`claude -w` を使っていた場合に該当）
 - 追跡ブランチの掃除として `git fetch --prune` を提案。
+- **リモートブランチは GitHub の「マージ時にブランチを自動削除」で既に消えていることが多い**。`git push origin --delete` の前に
+  `git ls-remote --heads origin <branch>` で存在を確認し、無ければ削除を試みない（試すと "remote ref does not exist" で失敗する。無害だが紛らわしい）。
+  `git fetch --prune` で追跡ブランチだけ掃除すればよい。
 - **フォーク運用**: origin（フォーク）に残っているマージ済みリモートブランチの削除も提案してよい。削除前に必ず `git ls-remote` + `git merge-base --is-ancestor <sha> upstream/<default>` で**1本ずつ**マージ済みを確認し、未マージのブランチは残して報告する。削除は `git push origin --delete <branch>`（承認必須・権限プロンプトが出るのは意図どおり）。
 
 ### 4. 学びを CLAUDE.md に蒸留し、同時に剪定する
@@ -42,6 +52,8 @@ PRがマージされたら「そのタスクは完了」。次のタスクにき
   - **Laravel(PHP)**: FormRequest/Policy の置き場所、Service/Action の分割方針、マイグレーション・命名規約、キュー/イベントの約束事。
   - **TypeScript / React**: 型の配置、コンポーネント分割方針、状態管理・データ取得フックの約束事、strictルール。
 - 既存の CLAUDE.md を読み、(a) 追記すべき新規約 と (b) 今回のマージで**古くなった・矛盾する記述** の両方を洗い出す。
+  **リポジトリに `.claude/rules/*.md`（パス指定ルール）がある場合は、それも読み、領域固有の落とし穴は該当するルールファイルへ追記する**
+  （どの領域にも効く汎用規約・アーキテクチャ原則だけ CLAUDE.md へ。分割済みの CLAUDE.md を再び肥大化させない）。差分の提示では追記先ファイルを明示する。
 - 追加と削除を**差分としてユーザーに提示** → 承認後に Edit で反映する。
 - 原則: CLAUDE.md は毎セッションの冒頭で読み込まれ context を消費する。**簡潔第一（目安200行以内）**。手順ものや特定ディレクトリだけに効く規則は CLAUDE.md に足さず、別スキル / スラッシュコマンド / `.claude/rules/` へ逃がすことを提案する。
 
