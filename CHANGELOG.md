@@ -42,6 +42,14 @@
 - `wp-phpunit`: `references/wp-testcase-patterns.md` に「不確実なコア挙動を使い捨てテストで実測する」
   手法の節を追加（実例: `WC_Product_Variable::get_price()` が親商品では `''` を返す、
   `DateTimeImmutable::getLastErrors()` が PHP 8.2+ で「報告なし」を空配列ではなく `false` で返す）
+- `dev-cycle`: `scripts/gate-round.sh`（`push` / `publish`）を追加。
+  ゲートラウンドの手入力だった末尾作業（push 直前の `T` の記録 → push → スレッドごとの返信と Resolve → サマリコメント → 未解決数の確認）
+  を 1 本にまとめ、1 つの PR で 5 ラウンド続けて手で回した時に起きやすいずれを防ぐ。
+  `push` は push が成功した時だけ `T=` を出力し、main / master の push を拒否する。
+  `publish` は返信・サマリのファイルを全部検証してから投稿し、ローカル HEAD が PR の head と違えば（未 push の sha を「修正済み」と案内しないため）
+  拒否、途中で失敗したら投稿済みの一覧を出す。`--dry-run` あり。bash 3.2（macOS 標準）
+  で動くよう空配列を避け、偽の `gh` / `gate-threads.sh` で 32 ケースを確認する `scripts/test-gate-round.sh` を同梱。
+  既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
 - `review-loop`: ソース側に反映されていなかった「R1/R2 で独立サブエージェントを併用する」手順を

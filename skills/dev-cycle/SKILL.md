@@ -337,6 +337,12 @@ git push origin <ブランチ>
 論理的に独立した修正はコミットを分ける。push 後に `G<n>.md`(下記フォーマット)と状態ファイルを
 更新し、`docs: record dev-cycle gate round <n>` として commit・push する。
 
+push は `git push` の代わりに `scripts/gate-round.sh push` で行うと、push 直前の UTC 時刻 `T` を取り、
+push が成功した時だけ `HEAD=<sha>` と `T=<時刻>` を出力する。この `T` を次の bot の `--since` と
+`gate-threads.sh list` に使う(push の後に取った `T` や前ラウンドの `T` を流用すると、指摘の取りこぼしや
+重複が起きる)。記録用 `docs:` コミットの push も同じスクリプトで行い、その `T` を次の依頼に使う。
+main / master の push は拒否する。
+
 **7. GitHub への反映**(push 後にのみ行う):
 
 - 修正したスレッド: 何をどう直したかとコミット sha を返信し、GraphQL `resolveReviewThread` で Resolve
@@ -347,6 +353,25 @@ git push origin <ブランチ>
 ```bash
 gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<THREAD_ID>"}) { thread { id isResolved } } }'
 ```
+
+返信・Resolve・サマリコメントは `scripts/gate-round.sh publish` で一括に行える(返信とサマリの本文は
+ファイルで渡す):
+
+```bash
+G=<Base directory for this skill>/scripts/gate-round.sh
+"$G" publish <N> --summary summary.md \
+  --done <THREAD_ID>=reply.md \
+  --hold <THREAD_ID>=reply.md \
+  --since <T>
+```
+
+- `--done`(何本でも): 修正した指摘。返信してから Resolve する
+- `--hold`(何本でも): 保留した指摘。返信のみで Resolve しない
+- `--since`: 最後に未解決スレッドの状況を表示し、ラウンドが「未解決 0」で終わったかを目で確認できる
+- 全ファイルを検証してから投稿し、ローカル HEAD が PR の head と違えば拒否する(未 push の sha を
+  「修正済み」として案内しないため。意図的な時だけ `--allow-unpushed`)
+- 途中で失敗した時は投稿済みの一覧を出すので、再実行は残りの指摘だけにする(全件を渡すと二重に返信する)
+- `--dry-run` で実行内容だけ確認できる
 
 **8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8。それ以外は Step 5 へ
 戻り、CI green 後に未収束 bot へ再依頼する(Step 6)。3 回目の依頼に対する修正は push して CI を
@@ -405,7 +430,7 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
   "$R" <N> --since <T> --copilot-only                 # Copilot のターン
   ```
   Bash は Step 6 と同じく `run_in_background`・timeout 1800000ms
-- **`<T>`** は、現在の HEAD を作った直近の push の直前時刻。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
+- **`<T>`** は、現在の HEAD を作った直近の push の直前時刻(`gate-round.sh push` が出力する)。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
 - **対象スレッドの絞り込み**: `gate-threads.sh list` / `status` は全 bot のスレッドを返す。そのターンの bot の author
   (Codex: `chatgpt-codex-connector`、Copilot: `copilot-pull-request-reviewer`)だけを対象にする。`bodies` は Copilot のターンだけ読む。
   他の bot が前のターンで保留にして未解決のまま残したスレッドは判断済みなので対象外
