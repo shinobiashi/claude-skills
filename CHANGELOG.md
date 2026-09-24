@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- `dev-cycle`: `request-gate-review.sh --wait-ci [--ci-timeout SECONDS]`。依頼の前に PR の現 HEAD の check が
+  すべて終わるのを待ち（`gh pr checks --json name,bucket` を 20 秒ごと。既定 480 秒）、green の時だけ依頼する。
+  fail / cancel は残りを待たずに、check が 180 秒現れない時・時間切れの時も、何も依頼せず exit 3（`CI=failed|none|timeout`）。
+  状態行に `CI=` を追加。jp4wc-rakusync PR #14 で 1 PR に 5 回手書きした「CI 待ち → 依頼」のループを置き換える。
+  `--wait-ci` を付けなければ従来どおりで、他プロジェクトへの影響なし
 - `dev-cycle`: 引数 `sequential`（任意）を追加。Codex と Copilot を同じラウンドで同時に依頼する既定の流れに対し、
   Codex → Copilot → Codex → … と 1 体ずつ順番に回し、前の bot の修正が入った HEAD を次の bot にレビューさせる
   （各 bot 最大 3 回。収束済み・上限到達・HEAD 不変の bot は飛ばす）。既定は従来どおり同時依頼で、他プロジェクトへの影響なし。

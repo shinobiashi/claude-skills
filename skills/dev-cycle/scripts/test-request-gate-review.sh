@@ -48,6 +48,10 @@ EOS
 #                          from the start
 #   FAKE_CODEX_AFTER       nth reviews probe from which a Codex review exists
 #   FAKE_CODEX_COMMENT_AFTER  nth comments probe from which a Codex comment exists
+#   FAKE_CI                `gh pr checks` answer from the (FAKE_CI_PENDING+1)th call on:
+#                          pass | fail | none (no checks: gh's error) | pending (forever)
+#   FAKE_CI_PENDING        number of `gh pr checks` calls that report a check still running
+#   FAKE_CI_EARLY_FAIL     1: while pending, another check has already failed
 cat > "$W/bin/gh" <<'EOS'
 #!/usr/bin/env bash
 S="$FAKE_STATE"
@@ -59,6 +63,23 @@ register() { touch "$S/pending"; now > "$S/event"; }
 case "$1 $2" in
 	"repo view") echo "o/r"; exit 0 ;;
 	"pr view") echo "$FAKE_HEAD"; exit 0 ;;
+	"pr checks")
+		log "$@"
+		n="$(count checks)"
+		mode="${FAKE_CI:-pass}"
+		[ "$n" -le "${FAKE_CI_PENDING:-0}" ] && mode=pending
+		case "$mode" in
+			none) echo "no checks reported on the 'feat/x' branch" >&2; exit 1 ;;
+			pass) echo '[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"pass"},{"name":"docs","bucket":"skipping"}]'; exit 0 ;;
+			fail) echo '[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"fail"}]'; exit 1 ;;
+			pending)
+				if [ "${FAKE_CI_EARLY_FAIL:-0}" -eq 1 ]; then
+					echo '[{"name":"lint","bucket":"fail"},{"name":"test","bucket":"pending"}]'
+				else
+					echo '[{"name":"lint","bucket":"pass"},{"name":"test","bucket":"pending"}]'
+				fi
+				exit 8 ;;
+		esac ;;
 	"pr edit")
 		log "$@"
 		if [ "${FAKE_EDIT_RC:-0}" -ne 0 ]; then echo "'' not found" >&2; exit "$FAKE_EDIT_RC"; fi
@@ -158,6 +179,8 @@ run 5 --timeout abc
 check "non-numeric --timeout rejected" rc_is 64
 run 5 --bogus
 check "unknown argument rejected" rc_is 64
+run 5 --ci-timeout abc
+check "non-numeric --ci-timeout rejected" rc_is 64
 
 echo "== Copilot: gh pr edit registers (the documented CLI path)"
 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=2 run 5 --copilot-only --since 2026-09-20T00:00:00Z --timeout 5
@@ -254,6 +277,53 @@ FAKE_PENDING_INITIAL=1 FAKE_EDIT_RC=1 FAKE_COPILOT_AFTER=40 run 5 --copilot-only
 check "leftover pending + accepted REST re-request: exit 0 on the review" rc_is 0
 check "explains why the unconfirmed re-request is waited on" has "already pending before this run and the re-request was accepted"
 check "COPILOT=responded" has "^COPILOT=responded$"
+
+echo "== --wait-ci: checks finish green, then the request goes out"
+FAKE_CI_PENDING=2 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=2 run 5 --copilot-only --wait-ci --timeout 5
+check "exit 0" rc_is 0
+check "CI=passed" has "^CI=passed$"
+check "polled the checks until none was pending (3 calls)" call_count "pr checks" 3
+check "waited 20s between CI polls" call_count "sleep 20" 2
+check "the checks are waited on before Copilot is asked" called_before "pr checks" "pr edit"
+check "a skipped check does not hold the wait" has "CI passed (3 checks)"
+check "DONE" has "^DONE$"
+
+echo "== --wait-ci: a failed check stops the run before any request"
+FAKE_CI=fail FAKE_CI_PENDING=1 run 5 --request-codex --wait-ci --timeout 5
+check "exit 3" rc_is 3
+check "CI=failed" has "^CI=failed$"
+check "names the failed check" has "test (fail)"
+check "Copilot is not asked" not_called "pr edit"
+check "Codex is not asked" not_called "pr comment"
+check "no response wait" not_polled
+check "no DONE" hasnt "^DONE$"
+
+echo "== --wait-ci: a failure while other checks still run stops at once"
+FAKE_CI=pending FAKE_CI_EARLY_FAIL=1 run 5 --copilot-only --wait-ci
+check "exit 3" rc_is 3
+check "CI=failed" has "^CI=failed$"
+check "one poll, no wait for the pending check" call_count "pr checks" 1
+check "no CI sleep" not_called "sleep 20"
+
+echo "== --wait-ci: no check ever appears -> exit 3 (not reported as passed)"
+FAKE_CI=none run 5 --copilot-only --wait-ci
+check "exit 3" rc_is 3
+check "CI=none" has "^CI=none$"
+check "gh's own message is shown" has "no checks reported"
+check "gave up after the 180s appear budget (9 x 20s)" call_count "sleep 20" 9
+check "Copilot is not asked" not_called "pr edit"
+
+echo "== --ci-timeout: checks still running -> exit 3"
+FAKE_CI=pending run 5 --copilot-only --ci-timeout 40
+check "exit 3" rc_is 3
+check "CI=timeout" has "^CI=timeout$"
+check "--ci-timeout implies --wait-ci and bounds the wait (2 x 20s)" call_count "sleep 20" 2
+check "Copilot is not asked" not_called "pr edit"
+
+echo "== without --wait-ci the checks are not looked at"
+FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=1 run 5 --copilot-only --timeout 5
+check "gh pr checks is not called" not_called "pr checks"
+check "CI=not-waited" has "^CI=not-waited$"
 
 echo "== T defaults to now when --since is absent"
 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=1 run 5 --copilot-only --timeout 5

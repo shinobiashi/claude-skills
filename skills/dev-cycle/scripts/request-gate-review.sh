@@ -44,14 +44,31 @@
 #   itself fails twice, Codex is not waited for — nothing was asked.
 # - Requests go out before any waiting, Codex first (its request is one
 #   comment; Copilot's confirmation can take up to 90s per method).
+# - `--wait-ci` waits for the PR's checks on the current head before asking
+#   anything, so a turn no longer needs a hand-written `gh pr checks` loop in
+#   front of this script (jp4wc-rakusync PR #14 wrote the same loop five
+#   times). A red check stops the run before any request: a bot asked to
+#   review a commit whose CI failed reviews code that is about to change.
+#   "No check ever appeared" is reported as its own failure, never as
+#   "passed" — a repository whose CI did not start is not a green one.
 #
 # Usage:
 #   request-gate-review.sh <PR> [--copilot-only|--codex-only] [--request-codex]
 #                          [--wait-only] [--timeout SECONDS] [--since TIMESTAMP]
+#                          [--wait-ci] [--ci-timeout SECONDS]
 #
 #   --wait-only   request nothing; only wait for the responses. For after a
 #                 manual request in the UI (exit 2), or to resume a wait that
 #                 timed out (exit 1). Pass the original run's --since.
+#   --wait-ci     first wait until every check of the PR's head has finished
+#                 (`gh pr checks`, polled every 20s); request only when none
+#                 failed or was cancelled. A failure stops the wait at once,
+#                 without waiting for the other checks. Exit 3 when a check
+#                 failed, when no check appeared within 180s, or when checks
+#                 were still running after --ci-timeout (default 480s, so
+#                 that CI + confirmation + the default --timeout stay within
+#                 the 30-minute background timeout dev-cycle uses; giving
+#                 --ci-timeout implies --wait-ci).
 #
 # Prints `T=<UTC timestamp>` once the requests are out — record it, it is
 # what `gate-threads.sh list/status/bodies` needs to identify this round's
@@ -64,9 +81,10 @@
 # not being new. A cutoff from before the push has no such gap, since
 # nothing either bot does in response to it can predate the push itself.
 #
-# Ends with one status line per bot, then `DONE` only on success:
+# Ends with one status line per bot and one for CI, then `DONE` only on success:
 #   COPILOT=responded|timeout|unregistered|not-waited
 #   CODEX=responded|timeout|request-failed|not-waited
+#   CI=passed|failed|none|timeout|not-waited
 #
 # Exit status:
 #   0  every bot being waited on responded to the current head
@@ -79,8 +97,12 @@
 #      few minutes when nothing else is waited on; when the other bot is
 #      waited on, that wait runs first and the status lines say which bot
 #      responded
+#   3  --wait-ci: CI did not pass (a check failed or was cancelled, no check
+#      appeared, or checks were still running at --ci-timeout). Nothing was
+#      requested; the CI line says which
 #
-# Worst case: about 5 minutes of requesting/confirming plus --timeout.
+# Worst case: --ci-timeout (with --wait-ci), then about 5 minutes of
+# requesting/confirming plus --timeout.
 # Requires `jq` (not bundled with `gh`) and gh 2.88+ (for `@copilot`).
 set -euo pipefail
 
@@ -96,6 +118,8 @@ request_codex=0
 wait_only=0
 timeout=900
 since=""
+wait_ci=0
+ci_timeout=480
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -111,6 +135,15 @@ while [ $# -gt 0 ]; do
 			esac
 			;;
 		--since) shift; since="${1:?--since requires a UTC timestamp}" ;;
+		--wait-ci) wait_ci=1 ;;
+		--ci-timeout)
+			shift
+			ci_timeout="${1:?--ci-timeout requires a value}"
+			case "$ci_timeout" in
+				''|*[!0-9]*) echo "request-gate-review: --ci-timeout wants a positive integer, got: $ci_timeout" >&2; exit 64 ;;
+			esac
+			wait_ci=1
+			;;
 		*) echo "request-gate-review: unknown argument: $1" >&2; exit 64 ;;
 	esac
 	shift
@@ -128,6 +161,74 @@ command -v jq >/dev/null 2>&1 || {
 	echo "request-gate-review: jq is required but was not found on PATH" >&2
 	exit 69
 }
+
+copilot_status=not-waited
+codex_status=not-waited
+ci_status=not-waited
+
+# Prints the status lines and exits. DONE marks success only.
+finish() {
+	echo "COPILOT=$copilot_status"
+	echo "CODEX=$codex_status"
+	echo "CI=$ci_status"
+	[ "$1" -eq 0 ] && echo DONE
+	exit "$1"
+}
+
+# CI wait: poll interval, and how long a PR may show no check at all before
+# that counts as "CI did not start" (a push takes a few seconds to register
+# its workflow runs; `gh pr checks` fails with "no checks reported" until
+# then).
+CI_STEP=20
+CI_APPEAR=180
+
+# Waits until every check of the PR's head has finished. Sets ci_status and
+# returns 0 only when none failed or was cancelled. `bucket` is gh's own
+# grouping of check states (pass, fail, pending, skipping, cancel). The
+# budget is counted in sleeps, like the confirmation polls.
+wait_for_ci() {
+	local waited=0 seen=0 out rc counts total pending failed
+	echo "request-gate-review: waiting for the checks of PR #$pr to finish (up to ${ci_timeout}s)"
+	while :; do
+		rc=0
+		out="$(gh pr checks "$pr" --json name,bucket 2>&1)" || rc=$?
+		# gh exits non-zero while checks are pending or failing, so the exit
+		# status says nothing here; only parsable JSON counts.
+		counts="$(printf '%s' "$out" | jq -r 'if type == "array" then "\(length) \([.[] | select(.bucket == "pending")] | length) \([.[] | select(.bucket == "fail" or .bucket == "cancel")] | length)" else empty end' 2>/dev/null || true)"
+		if [ -n "$counts" ]; then
+			set -- $counts
+			total="$1" pending="$2" failed="$3"
+			[ "$total" -gt 0 ] && seen=1
+			if [ "$failed" -gt 0 ]; then
+				ci_status=failed
+				echo "request-gate-review: CI failed — nothing is requested:" >&2
+				printf '%s' "$out" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "request-gate-review:   \(.name) (\(.bucket))"' >&2 2>/dev/null || true
+				return 1
+			fi
+			if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+				ci_status=passed
+				echo "request-gate-review: CI passed ($total checks)"
+				return 0
+			fi
+		fi
+		if [ "$seen" -eq 0 ] && [ "$waited" -ge "$CI_APPEAR" ]; then
+			ci_status=none
+			echo "request-gate-review: no check appeared on PR #$pr within ${CI_APPEAR}s (last gh output, exit $rc: $out) — nothing is requested" >&2
+			return 1
+		fi
+		if [ "$waited" -ge "$ci_timeout" ]; then
+			ci_status=timeout
+			echo "request-gate-review: checks were still running after ${ci_timeout}s — nothing is requested" >&2
+			return 1
+		fi
+		sleep "$CI_STEP"
+		waited=$((waited + CI_STEP))
+	done
+}
+
+if [ "$wait_ci" -eq 1 ]; then
+	wait_for_ci || finish 3
+fi
 
 slug="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 owner="${slug%%/*}"
@@ -355,9 +456,6 @@ post_codex_request() {
 	return 1
 }
 
-copilot_status=not-waited
-codex_status=not-waited
-
 # Requests first, Codex before Copilot — see header.
 if [ "$want_codex" -eq 1 ] && [ "$request_codex" -eq 1 ] && [ "$wait_only" -eq 0 ]; then
 	if ! post_codex_request; then
@@ -377,14 +475,6 @@ if [ "$want_copilot" -eq 1 ] && [ "$wait_only" -eq 0 ]; then
 fi
 
 echo "T=$T"
-
-# Prints the status lines and exits. DONE marks success only.
-finish() {
-	echo "COPILOT=$copilot_status"
-	echo "CODEX=$codex_status"
-	[ "$1" -eq 0 ] && echo DONE
-	exit "$1"
-}
 
 # 2 when a request failed or never registered, else $1.
 exit_code_for() {

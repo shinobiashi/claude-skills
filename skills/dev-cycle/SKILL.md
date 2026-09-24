@@ -214,6 +214,10 @@ gh pr checks "$N" --watch --fail-fast
 
 timeout は 600000ms。
 
+Step 6 の依頼の直前の CI 待ちは、`request-gate-review.sh` の `--wait-ci` でまとめられる(下記。CI が
+green になってから依頼し、red なら何も依頼せずに exit 3 で返る)。その場合この節の until ループは要らない。
+最終ラウンドの修正の後(再依頼しない)と、`--wait-ci` を使わない時はこの節のとおり待つ。
+
 - green → Step 6(または最終ラウンド後なら Step 8)
 - red → `gh run view <run-id> --log-failed` で原因を確認し、ローカルで品質チェックを実行する。
   ローカルで再現し軽微(lint・format・型)なら修正して **Step 7 の確認ゲート**を通してから
@@ -236,6 +240,7 @@ R=<Base directory for this skill>/scripts/request-gate-review.sh
 "$R" <N> --since <T> --copilot-only         # Codex が収束済み
 "$R" <N> --since <T> --codex-only           # Copilot が収束済み
 "$R" <N> --since <T> --wait-only [--copilot-only]   # 依頼せず待つだけ(exit 2 の後にユーザーが UI から依頼した時、exit 1 の後に待ち直す時)
+"$R" <N> --since <T> --wait-ci [...]        # 先に PR の CI の完了を待ち、green の時だけ依頼する(Step 5 の待ちを兼ねる)
 ```
 
 Codex の自動レビュー(push で自動起動する設定)が有効かどうかは CLAUDE.md の記載や過去 PR の
@@ -270,13 +275,21 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")も応答と見なす
 - `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
   `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
+- `--wait-ci` の時は依頼より前に `gh pr checks <N> --json name,bucket` を 20 秒ごとに見て、現 HEAD の check が
+  すべて終わるまで待つ(最大 `--ci-timeout` 秒。既定 480 秒 = CI + 登録確認 5 分 + 応答待ち 15 分が外側の
+  timeout 1,800 秒に収まる値)。fail / cancel が 1 つでも出たら残りを待たずに **exit 3**(何も依頼しない)。
+  180 秒たっても check が 1 つも現れない時も exit 3(`CI=none`。CI が始まっていないのを green と見なさない)。
+  jp4wc-rakusync PR #14 では、依頼の前の CI 待ちの until ループを 1 PR で 5 回手書きしていた
 - 最後に bot ごとの状態行 `COPILOT=responded|timeout|unregistered|not-waited` /
-  `CODEX=responded|timeout|request-failed|not-waited` を出し、成功時だけ `DONE` を出す。同時依頼で片方だけ
+  `CODEX=responded|timeout|request-failed|not-waited` と `CI=passed|failed|none|timeout|not-waited` を出し、成功時だけ `DONE` を出す。同時依頼で片方だけ
   応答した時は、この行で応答した bot を見分ける(終了コードだけで判断しない)
 
 終了コード: `0` 待った bot がすべて現 HEAD に応答 / `1` TIMEOUT(依頼は登録されたが `--timeout` 内に応答が無い)/
 `2` 依頼が出せなかった・登録されなかった(Copilot: 2 方法とも 5 分以内に確認できず。Codex: "@codex review" を
 投稿できず)。`2` は他に待つ bot が無ければ約 5 分で返る(同時依頼で他方を待っている時は、その待ちの後に返る)。
+`3`(`--wait-ci` の時だけ)CI が green にならなかった: check の失敗・取消(`CI=failed`)、check が現れない(`CI=none`)、
+`--ci-timeout` 内に終わらない(`CI=timeout`)。何も依頼していないので依頼回数に数えない。`failed` は Step 5 の red の手順に、
+`none` / `timeout` は「人間に確認する条件」(CI が非自明な状態)に進む。
 
 **exit 2(Copilot 未登録)の時**は「人間に確認する条件」で次の選択肢を出す:
 (a) ユーザーが PR 画面の Reviewers から Copilot を手動で依頼し、Claude は `"$R" <N> --wait-only --since <T>`
@@ -451,9 +464,10 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 
 - **依頼はそのターンの bot だけ**:
   ```bash
-  "$R" <N> --since <T> --codex-only --request-codex   # Codex のターン(--request-codex は Codex が push で自動レビューしないリポジトリ用)
-  "$R" <N> --since <T> --copilot-only                 # Copilot のターン
+  "$R" <N> --since <T> --codex-only --request-codex --wait-ci   # Codex のターン(--request-codex は Codex が push で自動レビューしないリポジトリ用)
+  "$R" <N> --since <T> --copilot-only --wait-ci                 # Copilot のターン
   ```
+  `--wait-ci` を付けると、前のターンの修正 push の CI 待ち(Step 5)もこの 1 回の呼び出しで済む
   Bash は Step 6 と同じく `run_in_background`・timeout 1800000ms
 - **`<T>`** は、現在の HEAD を作った直近の push の直前時刻(`gate-round.sh push` が出力する)。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
 - **対象スレッドの絞り込み**: `gate-threads.sh list` / `status` は全 bot のスレッドを返す。そのターンの bot の author
