@@ -52,6 +52,28 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `dev-cycle`: `scripts/request-gate-review.sh` の Copilot 依頼が登録されない問題。REST の `reviewers[]=Copilot`
+  （GitHub が文書化していない値）が 2026-09-21 頃から 201 を返しながら 6 回に 1 回程度しか登録されず
+  （jp4wc-rakusync PR #4〜#11。timeline に `review_requested` が出ず、pending にもならず、レビューも来ない。
+  同じ PR への Web UI からの依頼は毎回登録された）、未登録のまま 15 分待って exit 2 になっていた。依頼を文書化された
+  `gh pr edit <N> --add-reviewer @copilot`（gh 2.88+。Web UI と同じ GraphQL mutation）→ REST
+  `copilot-pull-request-reviewer[bot]` の順に改め、登録確認（GraphQL `reviewRequests` と REST `requested_reviewers` の
+  pending 一覧・timeline イベント・現 HEAD へのレビュー）を方法ごとに 90 秒、最初の依頼から合計 5 分まで行ってから
+  exit 2 にする。2026-09-23 に installed 側で「登録確認は診断のみで待ちを止めない」に変えた版は omotegae-project の
+  記録（登録確認が通らないのにレビューが届く）を根拠にしていたが、その PR の timeline には依頼イベントがあり、
+  遅かったのは確認手段（60 秒の pending 一覧・数分遅れる timeline）だった。`--wait-only`（UI からの手動依頼の後や
+  TIMEOUT 後に待つだけ）、bot ごとの状態行 `COPILOT=` / `CODEX=`（同時依頼で片方だけ応答した時に見分ける）、
+  `@codex review` の投稿失敗時の再試行 1 回と「投稿できなければ待たない」を追加。偽の `gh` / `sleep` で
+  64 ケースを確認する `scripts/test-request-gate-review.sh` を同梱。SKILL.md の Step 6・順番実行・
+  「人間に確認する条件」を更新（exit 2 の選択肢の先頭は「ユーザーが UI から依頼 → `--wait-only` で待つ」）。
+  使い捨ての jp4wc-rakusync PR #12 で検証: `gh pr edit` の依頼が 0 秒で pending 一覧に現れ、timeline にも即時に
+  `review_requested` が残り、2 分後にレビューが届いて exit 0
+- drift の再同期: 2026-09-22〜24 に installed 側（`~/.claude/skills/`）だけを直接編集していた 3 スキルをソースへ
+  取り込んだ（`install.sh --check` で検出。`review-loop`・`post-merge` に続く同じ事故）。`dev-cycle`（SKILL.md・
+  request-gate-review.sh。上の修正の土台）、`fix-copilot-review`（`gate-threads.sh bodies` が File summaries 表の
+  セルに `**Moderate (1 vote):**` 等の重大度付きで書かれた指摘を落とさない。表セルにしか指摘が無い回があった）、
+  `wp-org-release`（1.1.0: 審査への応答手順 Step 2b と、提出フォームの説明の無い "Additional Information" 欄の正体
+  〔`class-upload-handler.php` で監査ログに残る Upload Comment。通知は飛ばない〕）
 - `review-loop`: ソース側に反映されていなかった「R1/R2 で独立サブエージェントを併用する」手順を
   取り込み、`~/.claude/skills/review-loop/SKILL.md`（installed）と再同期。installed 側が
   2026-09-12 頃に直接手編集されソースより進んでいたため、`install.sh` を実行すると

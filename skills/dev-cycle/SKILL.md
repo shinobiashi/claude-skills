@@ -99,9 +99,11 @@ review-loop / PR:
 - main が進んでコンフリクトする、rebase が必要
 
 ゲートラウンド:
-- bot が 15 分待っても応答しない(再依頼 / 待たずに進める / 中断)。**「応答しない」は「これ以上
-  指摘が無い」と同義ではない**(Codex・Copilot とも push から数時間経ってから応答した実績がある)。
-  「待たずに進める」を選んだ場合も、最終報告で後日 `fix-copilot-review` による再確認を案内する
+- bot が 15 分待っても応答しない(`request-gate-review.sh` が exit 1。`--wait-only` で待ち直す / 待たずに進める /
+  中断)。**「応答しない」は「これ以上指摘が無い」と同義ではない**(Codex・Copilot とも push から数時間経ってから
+  応答した実績がある)。「待たずに進める」を選んだ場合も、最終報告で後日 `fix-copilot-review` による再確認を案内する
+- Copilot の依頼が登録されない(同スクリプトが exit 2。ユーザーが UI から手動で依頼して `--wait-only` で待つ /
+  待たずに進める / 中断。Step 6 参照)
 - 指摘の仕分けで迷う: 修正すると設計や絶対ルールの解釈に踏み込む、修正範囲が大きい
   (目安: 変更ファイル 5 超・新規テーブル・公開 API の契約変更)、妥当かどうか判断しきれない
 - 人間のレビュアー(bot 以外)のコメントが PR に付いた(対象に含めるか)
@@ -233,34 +235,57 @@ R=<Base directory for this skill>/scripts/request-gate-review.sh
 "$R" <N> --since <T> --request-codex        # Codex の自動レビューが無いリポジトリ: "@codex review" も投稿する
 "$R" <N> --since <T> --copilot-only         # Codex が収束済み
 "$R" <N> --since <T> --codex-only           # Copilot が収束済み
+"$R" <N> --since <T> --wait-only [--copilot-only]   # 依頼せず待つだけ(exit 2 の後にユーザーが UI から依頼した時、exit 1 の後に待ち直す時)
 ```
 
 Codex の自動レビュー(push で自動起動する設定)が有効かどうかは CLAUDE.md の記載や過去 PR の
 コメントで判断する(有効なリポジトリで `@codex review` を投稿しても「Codex アカウントを接続して」
 という案内が返るだけ)。
 
-Bash `run_in_background`、**timeout 1800000ms**(登録確認 最大 2 回 × 300 秒 + 応答待ち 900 秒 ≒
-最悪 1,530 秒。短いと登録が遅れたケースでスクリプトが `DONE` / 終了コードを出す前に殺される)。
+Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大約 5 分 + 応答待ち最大 `--timeout`
+〔既定 900 秒〕≒ 最悪 1,200 秒。短いと `DONE` / 終了コードを出す前にスクリプトが殺される)。出力は `| tail` などに
+流さずファイルに書き出し、終了コードを取ってから読む(パイプに流すと終了コードが失われる)。
 
 スクリプトがやること:
 
-- Copilot への依頼は `gh api ... requested_reviewers` が成功を返しても実際には登録されないことがあり、
-  逆に登録されていても issue timeline API への反映が数分遅れる。そのため **3 系統の証拠**
-  (`pulls/<N>/requested_reviewers` に Copilot が現れる〈POST 前に不在だった場合のみ〉/ timeline の
-  `review_requested` イベント / 現 HEAD への Copilot レビュー到着)のいずれかを最大 5 分ポーリングして
-  登録を確認してから待つ。exit 2(未登録)が出たら、再依頼の前に `gh pr view <N> --json reviews` と
-  timeline を自分で確認する
+- 依頼は待つ前にまとめて出す。Codex(`--request-codex` 時の "@codex review" 投稿。失敗したら 10 秒後に 1 回だけ
+  再試行し、それでも失敗なら Codex は待たない)→ Copilot の順
+- **Copilot への依頼は GitHub が文書化した方法だけを使う**: まず `gh pr edit <N> --add-reviewer @copilot`
+  (gh 2.88 以降。Web UI と同じ GraphQL mutation)、登録が確認できなければ REST の
+  `POST pulls/<N>/requested_reviewers` に `copilot-pull-request-reviewer[bot]`。以前の REST `reviewers[]=Copilot`
+  は文書化されていない値で、2026-09-21 頃から 201 を返しながら 6 回に 1 回程度しか登録されなかった
+  (jp4wc-rakusync PR #4〜#11: timeline に `review_requested` が出ず、pending にもならず、レビューも来ない。
+  同じ PR への UI からの依頼は毎回登録された)。omotegae-project で「登録確認は通らないがレビューは届く」と
+  記録した件も、timeline には依頼イベントがあり登録自体はされていた — 遅すぎたのは確認手段(60 秒の pending
+  一覧・timeline)であって、確認をやめる根拠ではない
+- **登録は必ず確認してから待つ**(確認せずに待つと、未登録の依頼 1 回ごとに `--timeout` の 15 分を失う)。
+  証拠は 3 系統のどれか: pending reviewer 一覧に Copilot が現れる(GraphQL `reviewRequests` と REST
+  `requested_reviewers` の両方を見る。依頼前に不在だった場合のみ有効)/ timeline の `review_requested` イベント
+  (依頼時刻以降。timeline API は数分遅れることがあるので単独では頼らない)/ 現 HEAD への Copilot レビュー到着。
+  方法ごとに最大 90 秒、その後も最初の依頼から合計 5 分までは証拠を待ち(timeline の遅延と、レビュー本体の
+  到着を拾う)、それでも無ければ **exit 2**。以前のように 15 分待ってから諦めない。実 PR(jp4wc-rakusync #12、
+  2026-09-24)では `gh pr edit` の依頼が 0 秒で pending 一覧に現れ、2 分後にレビューが届いた
 - 応答の判定は提出時刻ではなく **review の `commit_id` が現 HEAD と一致するか**で行う(両 bot とも
   1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある)。Codex は加えて
   `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")も応答と見なす
 - `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
   `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
+- 最後に bot ごとの状態行 `COPILOT=responded|timeout|unregistered|not-waited` /
+  `CODEX=responded|timeout|request-failed|not-waited` を出し、成功時だけ `DONE` を出す。同時依頼で片方だけ
+  応答した時は、この行で応答した bot を見分ける(終了コードだけで判断しない)
 
-終了コード: `0` 応答あり / `1` TIMEOUT / `2` Copilot の依頼が登録されなかった(Codex を待っていれば
-その応答は待ってから 2 になる)。
+終了コード: `0` 待った bot がすべて現 HEAD に応答 / `1` TIMEOUT(依頼は登録されたが `--timeout` 内に応答が無い)/
+`2` 依頼が出せなかった・登録されなかった(Copilot: 2 方法とも 5 分以内に確認できず。Codex: "@codex review" を
+投稿できず)。`2` は他に待つ bot が無ければ約 5 分で返る(同時依頼で他方を待っている時は、その待ちの後に返る)。
 
-TIMEOUT なら「人間に確認する条件」(再依頼 / 待たずに進める / 中断)。**TIMEOUT は「bot が
-使えない/指摘を出し尽くした」ことを意味しない**(応答が Step 6 の待ち時間より遅れているだけの
+**exit 2(Copilot 未登録)の時**は「人間に確認する条件」で次の選択肢を出す:
+(a) ユーザーが PR 画面の Reviewers から Copilot を手動で依頼し、Claude は `"$R" <N> --wait-only --since <T>`
+(Copilot のターンなら `--copilot-only` も)で待つ〔推奨。UI からの依頼はこれまで毎回登録された〕/
+(b) この bot を待たずに進める(「未確認」として記録)/ (c) 中断。手動依頼も依頼回数に数える(同じ HEAD への
+1 回の依頼)。手動依頼の後にスクリプトで依頼し直さない(二重依頼になる。待つのは `--wait-only`)。
+
+TIMEOUT(exit 1)なら「人間に確認する条件」(`--wait-only` で待ち直す / 待たずに進める / 中断)。**TIMEOUT は
+「bot が使えない/指摘を出し尽くした」ことを意味しない**(応答が Step 6 の待ち時間より遅れているだけの
 可能性が高い)。3 ラウンドに達して先へ進む場合、状態ファイルと最終報告には「収束」ではなく
 「未確認(bot 側は時間差で応答している可能性が高い)」と記録し、最終報告の「次にできること」で
 `fix-copilot-review` による後日の再確認を必ず案内する。
@@ -443,7 +468,8 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 - **終了**: 飛ばされずに残る bot がいなくなったら Step 8 へ。片方の bot だけが残った場合は、その bot が
   CI 待ちを挟みながら続けてターンを取る。最後のターンの修正は push して CI を待つが、再依頼はしない(既定と同じ)
 - **確認ゲート**(Step 7-5)は既定と同じくターンごと。`auto-commit` で飛ばせる
-- **TIMEOUT・Copilot の依頼が登録されない場合**の扱いは既定と同じ。TIMEOUT で「待たずに進める」を選んだ時は、
+- **TIMEOUT(exit 1)・Copilot の依頼が登録されない場合(exit 2)**の扱いは Step 6 と同じ。exit 2 でユーザーが手動で
+  依頼したら `"$R" <N> --since <T> --wait-only --copilot-only` で待つ。「待たずに進める」を選んだ時は、
   その bot を「未確認」として記録し、依頼回数には数えたまま次のターンへ進む
 
 ## 報告フォーマット
