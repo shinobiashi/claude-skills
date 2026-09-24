@@ -1,7 +1,7 @@
 ---
 name: wp-org-release
-version: "1.0.0"
-description: "Use when publishing or releasing a WordPress plugin to the WordPress.org plugin directory: initial submission, SVN workflow (trunk/tags/assets), readme.txt management, banner/icon/screenshot assets, and Stable tag updates."
+version: "1.1.0"
+description: "Use when publishing or releasing a WordPress plugin to the WordPress.org plugin directory: initial submission, responding to a plugin review and uploading a corrected version (including the undocumented \"Additional Information\" field on the submission form), SVN workflow (trunk/tags/assets), readme.txt management, banner/icon/screenshot assets, and Stable tag updates."
 compatibility: "Targets WordPress.org SVN-based plugin repository. Requires SVN client. Tested with WP-CLI 2.x and @wordpress/scripts for ZIP generation."
 ---
 
@@ -12,6 +12,7 @@ compatibility: "Targets WordPress.org SVN-based plugin repository. Requires SVN 
 Use this skill when:
 
 - Submitting a plugin to WordPress.org for the first time
+- Responding to a plugin review (uploading a corrected version)
 - Releasing a new version of an existing WordPress.org plugin
 - Updating readme.txt content (description, changelog, FAQ)
 - Managing plugin directory assets (banners, icons, screenshots)
@@ -234,6 +235,10 @@ Categories of plugins that are **not accepted at all** (do not submit):
 Then upload the `.zip` (**max 10 MB**) and wait for the review email —
 typically 1-10 days, with a target of 5 business days.
 
+The form also has an **"Additional Information"** free-text field next to the
+file input. It has no help text or placeholder, so its purpose is easy to
+misread: see "Step 2b" below for what it actually does and what to write in it.
+
 Notes after submitting:
 
 - The slug is derived from `Plugin Name:` in the main plugin file. It can be
@@ -244,6 +249,44 @@ Notes after submitting:
   and form processing without a nonce
 
 Since 2026-03 an official Plugin Directory MCP server also lets you validate and submit plugins via AI/MCP tooling (`https://developer.wordpress.org/plugins/wordpress-org/using-the-mcp-server/`) — but submissions still go through the same human review as the web form.
+
+### Step 2b: Responding to a Review
+
+When the review team asks for changes, the plugin moves to `pending` and you
+get an email listing the issues. **Corrected versions are uploaded from the
+submission page, not emailed**: `https://wordpress.org/plugins/developers/add/`
+shows an **"Upload updated "<Plugin>" plugin for review."** control for each
+plugin of yours that is still in review. You can re-upload at any time.
+
+That form carries the same **"Additional Information"** textarea as the initial
+submission form. What it actually is, per the directory's own source
+(`plugin-directory/shortcodes/class-upload.php` and `class-upload-handler.php`
+in the `WordPress/wordpress.org` repository):
+
+- It is a plain `<textarea name="comment">` with **no help text, placeholder, or
+  length limit**. The `rows="3"` sizing signals a short note, not an essay
+- On submit, the handler stores it via `Tools::audit_log()` as an entry titled
+  `Upload Comment for <link to the uploaded ZIP>`, attached to the plugin post.
+  **Reviewers read it in their admin tool next to the file you uploaded**
+- It is **not an email and sends no notification**. Do not rely on it alone to
+  tell the reviewer you have responded — also reply in the review email thread
+
+So write it as a changelog aimed at the reviewer, not as a letter: no greeting,
+no signature, one numbered point per item in the review email, in the reviewer's
+own order and wording. Quote the exact `file.php:123` locations they cited when
+the fix is a removal, and name the verification you ran (Plugin Check with its
+full flags, PHPCS sniff names) rather than claiming the code is fine.
+
+Gotchas:
+
+- **An identical ZIP is rejected.** The handler compares `sha1_file()` against
+  the `uploaded_zip_hash` post meta and fails with "You've already uploaded that
+  ZIP file." Bump the version and rebuild; do not re-upload the reviewed file
+- Build the ZIP the same way you would for release (see step 3) and verify it
+  before uploading — Plugin Check must be run against the **extracted ZIP**, not
+  the source tree, or you will be reading errors from files you do not ship
+- The review team aims to reply within ten business days; a plugin with code
+  issues takes as long as the back-and-forth takes
 
 ### Step 3: After Approval
 

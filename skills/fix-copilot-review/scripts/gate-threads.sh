@@ -22,7 +22,9 @@
 #   gate-threads.sh status <PR> [SINCE_ISO8601]         count unresolved threads per bot,
 #                                                       plus Copilot review bodies to read
 #   gate-threads.sh bodies <PR> [SINCE_ISO8601]         print Copilot review bodies of the current
-#                                                       head (URL, verdict headline, Suppressed comments)
+#                                                       head (URL, verdict headline, Suppressed
+#                                                       comments, and any File summaries table
+#                                                       cell with a bold severity marker)
 #   gate-threads.sh reply <PR> <THREAD_ID> <BODY_FILE|-> reply to a thread
 #   gate-threads.sh done <PR> <THREAD_ID> <BODY_FILE|->  reply, then resolve
 #
@@ -36,10 +38,13 @@
 # Copilot does not always open a thread per finding: a "Needs a closer look"
 # or "Changes recommended" review can carry its findings only in the review
 # body (the headline sentence and a "Suppressed comments" section) with
-# zero inline threads (seen repeatedly in real PRs). `bodies` prints those
-# so a round can judge them like threads; `status` counts how many such
-# reviews arrived since SINCE so a "0 new threads" round is not mistaken
-# for convergence.
+# zero inline threads (seen repeatedly in real PRs). A finding can also live
+# inside a "File summaries" table cell as a bold severity marker
+# (`**Moderate (1 vote):** ...`) with nothing in Suppressed comments at all
+# (PR #60's G1 round) — `bodies` keeps those cells instead of stripping the
+# whole table as noise. `bodies` prints all of this so a round can judge it
+# like threads; `status` counts how many such reviews arrived since SINCE so
+# a "0 new threads" round is not mistaken for convergence.
 #
 # `list` / `status` / `bodies` depend on `jq` (not bundled with `gh`).
 set -euo pipefail
@@ -151,9 +156,12 @@ cmd_show() {
 # responses by commit: a delayed review of an *older* push can land after
 # SINCE and would otherwise count as this round's findings.
 # `headline` is the verdict line ("### 🟡 Changes recommended");
-# `has_findings` is true when the body carries a Suppressed comments section
-# or a non-approving verdict, i.e. when there is something a round must read
-# even with zero threads. `--paginate` pages are flattened with `jq -s`.
+# `has_findings` is true when the body carries a Suppressed comments section,
+# a non-approving verdict, or a bold severity marker inside a File summaries
+# table cell (`**Moderate (1 vote):**`, `**Critical:**`, ...) — the last one
+# can appear even on a review whose only verdict text reads as neutral, i.e.
+# when there is something a round must read even with zero threads.
+# `--paginate` pages are flattened with `jq -s`.
 # A review with no summary body has `body: null`; it is normalized to ""
 # so the parsing never aborts the whole listing.
 copilot_reviews() {
@@ -176,15 +184,19 @@ copilot_reviews() {
 			submitted_at,
 			commit: .commit_id[0:7],
 			headline: ((.body | [match("###[^\n]*")] | .[0].string) // "(no headline)"),
-			has_findings: ((.body | test("Suppressed comments \\(")) or (.body | test("Changes recommended|Needs a closer look"))),
+			has_findings: ((.body | test("Suppressed comments \\(")) or (.body | test("Changes recommended|Needs a closer look")) or (.body | test("\\*\\*(Critical|High|Moderate|Medium|Minor|Low)( \\(\\d+ votes?\\))?:\\*\\*"))),
 			body
 		}'
 }
 
 # Prints each Copilot review body (current head, since SINCE) with the HTML
-# and the file summary table stripped, so the verdict, its sentence and the
-# Suppressed comments read like a thread. The review URL is printed so a
-# body-only finding can be cited in G<n>.md, where a thread URL would go.
+# and the merely-cosmetic file summary table rows stripped, so the verdict,
+# its sentence and the Suppressed comments read like a thread. A table row
+# that itself carries a finding as a bold severity marker
+# (`**Moderate (1 vote):** ...`) is kept — PR #60's G1 round had real
+# findings living only there, with nothing in Suppressed comments, and a
+# blanket `grep -v '^|'` silently discarded them. The review URL is printed
+# so a body-only finding can be cited in G<n>.md, where a thread URL would go.
 cmd_bodies() {
 	local pr="${1:?PR number required}" since="${2:-}" line
 
@@ -192,7 +204,8 @@ cmd_bodies() {
 		jq -r '"=== review \(.id) \(.submitted_at) \(.commit) has_findings=\(.has_findings) ===\n\(.url)"' <<<"$line"
 		jq -r '.body' <<<"$line" \
 			| sed -e 's/<[^>]*>//g' \
-			| grep -v -e '^|' -e 'Get a fresh assessment' -e '^💡' -e '^[[:space:]]*$' \
+			| grep -v -e 'Get a fresh assessment' -e '^💡' -e '^[[:space:]]*$' \
+			| awk '!/^\|/ || /\*\*(Critical|High|Moderate|Medium|Minor|Low)( \([0-9]+ votes?\))?:\*\*/' \
 			|| true
 		echo
 	done

@@ -82,8 +82,10 @@ S=<Base directory for this skill>/scripts/gate-threads.sh
 ```
 
 `status` / `bodies` は系統 B（レビュー本文）の入口で、手順 2b の GraphQL を手書きせずに済む
-（`bodies` は HTML と File summaries の表を落として判定見出し・総評・`Suppressed comments` を
-そのまま表示する。`SINCE` は包含比較、対象は PR の現 HEAD への review のみ）。
+（`bodies` は HTML を落とし、File summaries の表は指摘の無い行だけ落として判定見出し・総評・
+`**Critical/High/Moderate/Medium/Minor/Low:**` 付きの表セル・`Suppressed comments` を表示する
+— 表セルにしか指摘が無い回（PR #60 の G1 ラウンド）を読み落とさないため。`SINCE` は包含比較、
+対象は PR の現 HEAD への review のみ）。
 
 `--dry-run` を付けると書き込み系コマンドの実行内容だけを表示する。`done` は返信が失敗したら
 Resolve しない（説明のないままスレッドを閉じないため）。PR 本文への対応サマリコメント
