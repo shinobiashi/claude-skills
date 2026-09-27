@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `review-loop`: 配置側（`~/.claude/skills/`）にだけあった `scripts/mutate-check.sh` / `test-mutate-check.sh` と
+  SKILL.md の「ミューテーション検証」節を元本に取り込んだ（`install.sh` の `rsync --delete` で消えないように）
 - `dev-cycle`: `request-gate-review.sh --wait-ci [--ci-timeout SECONDS]`。依頼の前に PR の現 HEAD の check が
   すべて終わるのを待ち（`gh pr checks --json name,bucket` を 20 秒ごと。既定 480 秒）、green の時だけ依頼する。
   fail / cancel は残りを待たずに、check が 180 秒現れない時・時間切れの時も、何も依頼せず exit 3（`CI=failed|none|timeout`）。
@@ -57,6 +59,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `review-loop`: `mutate-check.sh --expect` が Vitest / Jest の失敗見出し（`× name`・`FAIL  file > … > name`・
+  `✕ name`・`● Suite › name`）を読めず、捕捉できていても「NOT CAUGHT BY THE NAMED TEST」になっていた（既定は PHPUnit の
+  `1) Name` だけだった）。既定の `--failure-line` に加え、シナリオテストを 22 → 27 件に（ロケール C でも通る）。
+  jp4wc-rakusync P1-S11（PR #23）で 3 回手で確かめ直した。あわせてテストの `cd` に `|| exit 2`（shellcheck SC2164）
 - `dev-cycle`: `scripts/request-gate-review.sh` の Copilot 依頼が登録されない問題。REST の `reviewers[]=Copilot`
   （GitHub が文書化していない値）が 2026-09-21 頃から 201 を返しながら 6 回に 1 回程度しか登録されず
   （jp4wc-rakusync PR #4〜#11。timeline に `review_requested` が出ず、pending にもならず、レビューも来ない。

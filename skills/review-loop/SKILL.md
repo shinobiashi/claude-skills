@@ -174,6 +174,13 @@ R3: (R2でR1指摘が未解消 or 新規Critical/Highが残った場合のみ) �
 1. R1.md を読み、Critical/High/Medium の各指摘IDについて
    **解消 / 未解消** を1件ずつ判定する(R1 と同様に独立サブエージェントへ「R1.md + 修正差分」を渡して
    検証させ、自分の判定と突き合わせる)
+   - **解消がテストの追加・書き換えに依存する指摘**(「テストが無い」「テストがトートロジー」等)は、コードを
+     読むだけで「解消」と判定しない。**対象の分岐・ガードを一時的に壊し、そのテストが落ちること**(ミューテーション)を
+     実測する。確認後は必ず元に戻し、`git diff --stat` が空(または実測前と一致)であることを確認する
+     (`git stash`/`checkout` で戻さない。未コミット差分を巻き込むため)。テストコマンドは CLAUDE.md の品質チェックに従う
+     (実績: PR #61 で R1-1「トートロジーのテスト」の解消を、分岐に 1 行足して当該テストが失敗することで確認できた)。
+     独立サブエージェントに検証を渡す場合は、この手順と「実測後に元へ戻す」ことをプロンプトで明示する
+   - **この手順は手書きせず、同梱の `scripts/mutate-check.sh` を使う**(次節)
 2. R1 の修正によって**新たに混入した**問題のみ、新規指摘として [R2-連番] で報告する
    (新規 Medium が見つかった場合、その場で簡単に直せるなら修正してよい。無理に修正せず
    backlog へ送ってもよい。いずれも収束判定には影響しない — 影響するのは新規 Critical/High のみ)
@@ -199,6 +206,54 @@ R3: (R2でR1指摘が未解消 or 新規Critical/Highが残った場合のみ) �
 | R1-1 | Critical | 解消 |
 | R1-2 | High | 未解消 → 下記 R2-1 参照 |
 ```
+
+## ミューテーション検証（`scripts/mutate-check.sh`）
+
+ガードを1つ壊し、それを固定しているはずのテストを走らせ、**どう終わってもファイルを元に戻す**。
+答えるのは「テストは気づいたか」の一点だけ。
+
+```bash
+M=<Base directory for this skill>/scripts/mutate-check.sh
+
+# 行を消す（最頻出）
+"$M" --file includes/class-foo.php \
+     --delete-matching "search_columns.*post_title" \
+     --expect 'test_search_matches_titles_only' \
+     --test-cmd 'composer test -- --filter Test_Foo'
+
+# 文字列を差し替える / 複数行のブロックを差し替える
+"$M" --file includes/class-foo.php --replace "'read_post'" "'exist'" ...
+"$M" --file includes/class-foo.php --replace-file old.txt new.txt ...
+
+# JS（Vitest / Jest）: --expect はテスト名（describe を除いた it の文言）の一部でよい
+"$M" --file assets/src/Foo.tsx --replace "keyCode !== 229" "true" \
+     --expect 'IME conversion' \
+     --test-cmd 'npx vitest run assets/src/Foo.test.tsx'
+
+# 変異の内容だけ確認して戻す（テストは走らせない）
+"$M" --file includes/class-foo.php --delete-matching '...' --dry-run
+```
+
+`--expect` が照合する「失敗の見出し」は、既定で PHPUnit（`1) Class::test`）・Vitest（`× name` /
+`FAIL  file > suite > name`）・Jest（`✕ name` / `● Suite › name`）。それ以外のランナーは `--failure-line <ERE>` で渡す。
+
+終了コード: `0` 捕捉できた（ガードは本当にテストされている） / `1` 捕捉できなかった
+（テストが通ってしまった、または `--expect` と違うテストが落ちた） /
+`2` セットアップ失敗（何も判定していない）。
+
+手書きのループに戻さない理由 — スクリプトが面倒を見る4点:
+
+- **必ず復元する**（`trap` で EXIT/INT/TERM を捕捉）。共有ワーキングツリーに変異を残す事故を防ぐ
+- **復元を検証する**（実行後に `git diff` が空であることを確認し、違えば exit 2 で大きく報告）。
+  そのため開始時にそのファイルが clean であることも要求する
+- **no-op の変異を拒否する**。マッチしなかった変異はファイルを変えないままテストを通し、
+  「ガードは覆われている」と誤読させる。実績: `perm => 'editable'` を足しただけの修正が
+  `post_status => 'any'` のせいで実際には無効だった件は、この種の取り違えと紙一重だった
+- **判定を言語化する**（CAUGHT / NOT CAUGHT / NOT CAUGHT BY THE NAMED TEST）。
+  `--test-cmd` は対象テストに絞って渡す（判定は終了ステータスを見る）
+
+`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（27件）が走る
+（引数は絶対パス。テストは作業用リポジトリへ `cd` するので、相対パスだと全件が落ちる）。
 
 ## R3: 最終ラウンド(R2 で APPROVE 条件[R1指摘の全解消 かつ 新規Critical/Highゼロ]を満たせなかった場合のみ)
 
