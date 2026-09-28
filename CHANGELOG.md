@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- `review-loop`: `mutate-check.sh` が、変異がガードではなくコードを壊した実行（PHP の Parse error・
+  `Class "…" not found`・`Call to undefined function`、JS の SyntaxError・ReferenceError）を BROKEN（exit 1）にする。
+  `--expect` のテストが落ちていても捕捉と数えない（jp4wc-rakusync P1-S12 で、`use` の無いクラスへの差し替えが全テストを
+  落として CAUGHT と読んだ）。`--allow-errors` で解除。`--expect` 以外のテストも落ちたら WARNING と件数を出し、
+  `--only` でそれを失敗（NOT CAUGHT CLEANLY）にする。シナリオテストを 27 → 38 件に
 - `review-loop`: 配置側（`~/.claude/skills/`）にだけあった `scripts/mutate-check.sh` / `test-mutate-check.sh` と
   SKILL.md の「ミューテーション検証」節を元本に取り込んだ（`install.sh` の `rsync --delete` で消えないように）
 - `dev-cycle`: `request-gate-review.sh --wait-ci [--ci-timeout SECONDS]`。依頼の前に PR の現 HEAD の check が

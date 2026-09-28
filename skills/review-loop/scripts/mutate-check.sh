@@ -29,15 +29,27 @@
 #                      --failure-line)
 #   --failure-line <ERE>  what a failure header looks like
 #                         (default: any of the above, see FAILURE_LINE)
+#   --only             with --expect: every failing test must match it, or the
+#                      verdict is NOT CAUGHT CLEANLY (the mutation broke more
+#                      than the guard). Without it, other failures only warn
+#   --allow-errors     accept a run whose output shows the code itself broke
+#                      (see BROKEN_LINE); by default that is NOT CAUGHT
 #   --dry-run          show the mutation diff, restore, and stop
 #   --quiet            only print the verdict
 #
 # --test-cmd may also come from $MUTATE_CHECK_TEST_CMD. Filter it down to the
 # tests under examination — the verdict keys on its exit status.
 #
+# A mutation that breaks the code rather than the guard (a parse error, a
+# class or function that no longer exists — e.g. a replacement naming a class
+# the file does not import) fails every test, the named one included, and
+# would read as CAUGHT while proving nothing. Such a run is reported as
+# BROKEN, and failures of tests other than --expect are reported.
+#
 # Exit codes:
 #   0  the mutation was caught (the guard is genuinely covered)
-#   1  the mutation was NOT caught (tests passed, or the wrong test failed)
+#   1  the mutation was NOT caught (tests passed, the wrong test failed, the
+#      mutation broke the code, or --only saw other tests fail)
 #   2  setup error — nothing was concluded (and the file is restored)
 
 set -uo pipefail
@@ -57,6 +69,12 @@ EXPECT=""
 # and "  ● Suite › name". Written as an alternation, not a bracket
 # expression, so the multi-byte marks match in any locale.
 FAILURE_LINE='^[[:space:]]*([0-9]+\)|×|✕|●|FAIL[[:space:]])'
+# The code did not load or compile: PHP parse errors and missing
+# classes / functions, JS syntax and reference errors. A null dereference or a
+# type error is left out on purpose: breaking a guard legitimately causes them.
+BROKEN_LINE='(Parse error|ParseError|syntax error, unexpected|(Class|Interface|Trait|Enum) "[^"]+" not found|Call to undefined (function|method)|Cannot redeclare|SyntaxError|ReferenceError)'
+ONLY=0
+ALLOW_ERRORS=0
 DRY_RUN=0
 QUIET=0
 MUTATION=""
@@ -74,13 +92,15 @@ while [ $# -gt 0 ]; do
 		--test-cmd) TEST_CMD="${2:-}"; shift 2 ;;
 		--expect) EXPECT="${2:-}"; shift 2 ;;
 		--failure-line) FAILURE_LINE="${2:-}"; shift 2 ;;
+		--only) ONLY=1; shift ;;
+		--allow-errors) ALLOW_ERRORS=1; shift ;;
 		--dry-run|-n) DRY_RUN=1; shift ;;
 		--quiet|-q) QUIET=1; shift ;;
 		--delete-matching) set_mutation delete-matching; ARG1="${2:-}"; shift 2 ;;
 		--replace) set_mutation replace; ARG1="${2:-}"; ARG2="${3:-}"; shift 3 ;;
 		--replace-file) set_mutation replace-file; ARG1="${2:-}"; ARG2="${3:-}"; shift 3 ;;
 		--apply) set_mutation apply; ARG1="${2:-}"; shift 2 ;;
-		-h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) die "unknown argument: $1" ;;
 	esac
 done
@@ -88,6 +108,7 @@ done
 [ -n "$FILE" ] || die "--file is required"
 [ -f "$FILE" ] || die "no such file: $FILE"
 [ -n "$MUTATION" ] || die "a mutation is required (--delete-matching / --replace / --replace-file / --apply)"
+[ "$ONLY" -eq 0 ] || [ -n "$EXPECT" ] || die "--only needs --expect (the tests that are allowed to fail)"
 if [ "$DRY_RUN" -eq 0 ]; then
 	[ -n "$TEST_CMD" ] || die "--test-cmd is required (or set MUTATE_CHECK_TEST_CMD)"
 fi
@@ -201,10 +222,23 @@ say "--- restored, working tree clean for $FILE ---"
 # match, which SIGPIPEs the upstream grep, and `pipefail` would then report
 # the whole pipeline as failed — turning a match into a miss.
 FAILING="$(grep -E "$FAILURE_LINE" "$OUT_FILE" || true)"
+BROKEN="$(grep -E "$BROKEN_LINE" "$OUT_FILE" | head -3 || true)"
+OTHERS=""
+if [ -n "$EXPECT" ] && [ -n "$FAILING" ]; then
+	OTHERS="$(grep -Ev "$EXPECT" <<<"$FAILING" || true)"
+fi
 
 VERDICT=0
 if [ "$TEST_STATUS" -eq 0 ]; then
 	printf 'NOT CAUGHT: the tests passed with the guard broken — nothing covers it.\n'
+	VERDICT=1
+elif [ -n "$BROKEN" ] && [ "$ALLOW_ERRORS" -eq 0 ]; then
+	printf 'BROKEN: the mutation broke the code, not the guard — the failures prove nothing.\n'
+	printf 'Rewrite the mutation so the file still loads (or pass --allow-errors if this is intended):\n'
+	printf '%s\n' "$BROKEN"
+	VERDICT=1
+elif [ "$ONLY" -eq 1 ] && [ -n "$OTHERS" ]; then
+	printf 'NOT CAUGHT CLEANLY: tests other than %s failed too — the mutation breaks more than the guard.\n' "$EXPECT"
 	VERDICT=1
 elif [ -n "$EXPECT" ]; then
 	if [ -n "$FAILING" ] && grep -Eq "$EXPECT" <<<"$FAILING"; then
@@ -216,6 +250,10 @@ elif [ -n "$EXPECT" ]; then
 	fi
 else
 	printf 'CAUGHT: the tests failed with the guard broken.\n'
+fi
+
+if [ "$VERDICT" -eq 0 ] && [ -n "$OTHERS" ]; then
+	printf 'WARNING: %s other failing test(s) besides %s — check they fail for the same reason (--only makes this a failure).\n' "$(grep -c . <<<"$OTHERS")" "$EXPECT"
 fi
 
 if { [ "$QUIET" -eq 0 ] || [ "$VERDICT" -ne 0 ]; } && [ -n "$FAILING" ]; then

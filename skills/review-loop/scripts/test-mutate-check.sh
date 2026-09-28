@@ -176,6 +176,68 @@ for runner in vitest jest; do
 done
 check "vitest/jest: file restored" "$(clean_tree && echo 0 || echo 1)"
 
+# ---- 12. a mutation that breaks the code (fatal / parse error) is BROKEN,
+#      even though the named test is among the failures
+cat > fatal.sh <<'EOF'
+#!/usr/bin/env bash
+if grep -q "current_user_can" guard.php; then
+	exit 0
+fi
+echo "There were 2 errors:"
+echo ""
+echo "1) Test_Guard::test_hides_invisible_items"
+echo 'Error: Class "OverwritePolicy" not found'
+echo "2) Test_Guard::test_shows_visible_items"
+echo 'Error: Class "OverwritePolicy" not found'
+exit 2
+EOF
+chmod +x fatal.sh
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./fatal.sh \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "broken: exits 1 when the code itself broke" "$( [ "$STATUS" -eq 1 ] && echo 0 || echo 1 )"
+check "broken: says BROKEN and quotes the error" "$(echo "$OUT" | grep -q 'BROKEN' && echo "$OUT" | grep -q 'not found' && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./fatal.sh --allow-errors \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "broken: --allow-errors accepts it" "$( [ "$STATUS" -eq 0 ] && echo 0 || echo 1 )"
+
+# ---- 13. other tests failing too: a warning by default, a failure with --only
+cat > wide.sh <<'EOF'
+#!/usr/bin/env bash
+if grep -q "current_user_can" guard.php; then
+	exit 0
+fi
+echo "1) Test_Guard::test_hides_invisible_items"
+echo "Failed asserting that two arrays are identical."
+echo "2) Test_Guard::test_counts_items"
+echo "Failed asserting that 2 is identical to 3."
+exit 1
+EOF
+chmod +x wide.sh
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./wide.sh \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "others: still caught by default" "$( [ "$STATUS" -eq 0 ] && echo 0 || echo 1 )"
+check "others: warns about the other failure" "$(echo "$OUT" | grep -q 'WARNING: 1 other failing test' && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./wide.sh --only \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "--only: exits 1 when other tests failed" "$( [ "$STATUS" -eq 1 ] && echo 0 || echo 1 )"
+check "--only: says NOT CAUGHT CLEANLY" "$(echo "$OUT" | grep -q 'NOT CAUGHT CLEANLY' && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./wide.sh --only \
+	--expect 'test_hides_invisible_items|test_counts_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "--only: exits 0 when every failure is expected" "$( [ "$STATUS" -eq 0 ] && echo 0 || echo 1 )"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh --only \
+	--delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "--only: without --expect is a setup error" "$( [ "$STATUS" -eq 2 ] && echo 0 || echo 1 )"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+check "clean catch: no warning" "$(echo "$OUT" | grep -q 'WARNING' && echo 1 || echo 0)"
+check "broken/others: file restored" "$(clean_tree && echo 0 || echo 1)"
+
 echo ""
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

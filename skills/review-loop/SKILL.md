@@ -232,14 +232,26 @@ M=<Base directory for this skill>/scripts/mutate-check.sh
 
 # 変異の内容だけ確認して戻す（テストは走らせない）
 "$M" --file includes/class-foo.php --delete-matching '...' --dry-run
+
+# 厳密モード: 落ちたテストがすべて --expect に一致した時だけ CAUGHT
+"$M" --file includes/class-foo.php --delete-matching '...' --only \
+     --expect 'test_a|test_b' --test-cmd '...'
 ```
 
 `--expect` が照合する「失敗の見出し」は、既定で PHPUnit（`1) Class::test`）・Vitest（`× name` /
 `FAIL  file > suite > name`）・Jest（`✕ name` / `● Suite › name`）。それ以外のランナーは `--failure-line <ERE>` で渡す。
 
 終了コード: `0` 捕捉できた（ガードは本当にテストされている） / `1` 捕捉できなかった
-（テストが通ってしまった、または `--expect` と違うテストが落ちた） /
-`2` セットアップ失敗（何も判定していない）。
+（テストが通ってしまった、`--expect` と違うテストが落ちた、変異がコードを壊した〔BROKEN〕、
+`--only` で他のテストも落ちた） / `2` セットアップ失敗（何も判定していない）。
+
+**変異がガードではなくコードを壊した時は BROKEN（exit 1）**: 出力に読み込みレベルの破損
+（PHP の Parse error・`Class "…" not found`・`Call to undefined function`、JS の SyntaxError・ReferenceError）が
+あれば、`--expect` のテストが落ちていても捕捉とは数えない。全テストが同じ理由で落ちるので何も証明しないため
+（実績: jp4wc-rakusync P1-S12 で、`use` の無いクラス名に差し替えた変異が 4 件すべてを落とし、CAUGHT と読んだ）。
+null の参照や型エラーは、ガードを外して正当に起きるので対象にしない。意図した時だけ `--allow-errors`。
+`--expect` 以外のテストも落ちた時は、判定は変えずに WARNING と件数を出す。関連テストが一緒に落ちるのは
+普通なので既定では失敗にしないが、`--only` を付けると失敗（NOT CAUGHT CLEANLY）にする。
 
 手書きのループに戻さない理由 — スクリプトが面倒を見る4点:
 
@@ -249,10 +261,10 @@ M=<Base directory for this skill>/scripts/mutate-check.sh
 - **no-op の変異を拒否する**。マッチしなかった変異はファイルを変えないままテストを通し、
   「ガードは覆われている」と誤読させる。実績: `perm => 'editable'` を足しただけの修正が
   `post_status => 'any'` のせいで実際には無効だった件は、この種の取り違えと紙一重だった
-- **判定を言語化する**（CAUGHT / NOT CAUGHT / NOT CAUGHT BY THE NAMED TEST）。
+- **判定を言語化する**（CAUGHT / NOT CAUGHT / NOT CAUGHT BY THE NAMED TEST / BROKEN / NOT CAUGHT CLEANLY）。
   `--test-cmd` は対象テストに絞って渡す（判定は終了ステータスを見る）
 
-`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（27件）が走る
+`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（38件）が走る
 （引数は絶対パス。テストは作業用リポジトリへ `cd` するので、相対パスだと全件が落ちる）。
 
 ## R3: 最終ラウンド(R2 で APPROVE 条件[R1指摘の全解消 かつ 新規Critical/Highゼロ]を満たせなかった場合のみ)
