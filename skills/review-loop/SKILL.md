@@ -236,6 +236,9 @@ M=<Base directory for this skill>/scripts/mutate-check.sh
 # 厳密モード: 落ちたテストがすべて --expect に一致した時だけ CAUGHT
 "$M" --file includes/class-foo.php --delete-matching '...' --only \
      --expect 'test_a|test_b' --test-cmd '...'
+
+# まだコミットしていない修正を試す（「前提」章で commit が許可されていない R2、dev-cycle の確認ゲート前）
+"$M" --file includes/class-foo.php --allow-dirty --delete-matching '...' --expect '...' --test-cmd '...'
 ```
 
 `--expect` が照合する「失敗の見出し」は、既定で PHPUnit（`1) Class::test`）・Vitest（`× name` /
@@ -256,15 +259,18 @@ null の参照や型エラーは、ガードを外して正当に起きるので
 手書きのループに戻さない理由 — スクリプトが面倒を見る4点:
 
 - **必ず復元する**（`trap` で EXIT/INT/TERM を捕捉）。共有ワーキングツリーに変異を残す事故を防ぐ
-- **復元を検証する**（実行後に `git diff` が空であることを確認し、違えば exit 2 で大きく報告）。
-  そのため開始時にそのファイルが clean であることも要求する
+- **復元を検証する**（実行前に取った控えと 1 バイトも違わないこと、既定ではさらに `git diff` が空であることを確認し、
+  違えば exit 2 で大きく報告）。そのため既定では開始時にそのファイルが clean であることも要求する。
+  未コミットの修正を試す時は `--allow-dirty` を付ける: 検証は控えとの比較だけになり、未コミットの変更はそのまま残る。
+  強制終了（SIGKILL）されると `git checkout` では戻せないので、控えの場所を最初に stderr へ出す
+  （実績: omotegae-project PR #81 の確認ゲート前に、この手順を手書きして控えの置き場所を取り違え、復元に一度失敗した）
 - **no-op の変異を拒否する**。マッチしなかった変異はファイルを変えないままテストを通し、
   「ガードは覆われている」と誤読させる。実績: `perm => 'editable'` を足しただけの修正が
   `post_status => 'any'` のせいで実際には無効だった件は、この種の取り違えと紙一重だった
 - **判定を言語化する**（CAUGHT / NOT CAUGHT / NOT CAUGHT BY THE NAMED TEST / BROKEN / NOT CAUGHT CLEANLY）。
   `--test-cmd` は対象テストに絞って渡す（判定は終了ステータスを見る）
 
-`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（38件）が走る
+`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（55件）が走る
 （引数は絶対パス。テストは作業用リポジトリへ `cd` するので、相対パスだと全件が落ちる）。
 
 ## R3: 最終ラウンド(R2 で APPROVE 条件[R1指摘の全解消 かつ 新規Critical/Highゼロ]を満たせなかった場合のみ)

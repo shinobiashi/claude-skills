@@ -103,7 +103,44 @@ OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh \
 STATUS=$?
 check "dirty: exits 2" "$( [ "$STATUS" -eq 2 ] && echo 0 || echo 1 )"
 check "dirty: mentions uncommitted changes" "$(echo "$OUT" | grep -q 'uncommitted changes' && echo 0 || echo 1)"
+check "dirty: points at --allow-dirty" "$(echo "$OUT" | grep -q -- '--allow-dirty' && echo 0 || echo 1)"
+
+# ---- 6b. --allow-dirty: a fix that is not committed yet (waiting at a
+#      confirmation gate) can be checked; the uncommitted change survives
+DIRTY="$(cat guard.php)"
+same_as_dirty() { [ "$(cat guard.php)" = "$DIRTY" ]; }
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh --allow-dirty \
+	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "allow-dirty: exits 0 when caught" "$( [ "$STATUS" -eq 0 ] && echo 0 || echo 1 )"
+check "allow-dirty: says CAUGHT" "$(echo "$OUT" | grep -q 'CAUGHT' && echo 0 || echo 1)"
+check "allow-dirty: restores the uncommitted content byte-for-byte" "$(same_as_dirty && echo 0 || echo 1)"
+check "allow-dirty: the uncommitted change is still uncommitted" "$(clean_tree && echo 1 || echo 0)"
+check "allow-dirty: prints where the pre-run copy is" "$(echo "$OUT" | grep -q 'pre-run copy' && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./blind.sh --allow-dirty \
+	--delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "allow-dirty: exits 1 when not caught" "$( [ "$STATUS" -eq 1 ] && echo 0 || echo 1 )"
+check "allow-dirty: restored after a miss too" "$(same_as_dirty && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh --allow-dirty \
+	--delete-matching 'this_pattern_matches_nothing' 2>&1)"
+STATUS=$?
+check "allow-dirty: a no-op mutation is still refused" "$( [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q 'changed nothing' && echo 0 || echo 1)"
+OUT="$(bash "$SCRIPT" --file guard.php --dry-run --allow-dirty \
+	--replace "'current_user_can'" "'__return_true'" 2>&1)"
+STATUS=$?
+check "allow-dirty dry-run: shows the mutation" "$( [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q '^+.*__return_true' && echo 0 || echo 1)"
+check "allow-dirty dry-run: does not show the uncommitted change as part of it" "$(echo "$OUT" | grep -qE '^[-+]// scratch' && echo 1 || echo 0)"
+check "allow-dirty dry-run: restores" "$(same_as_dirty && echo 0 || echo 1)"
+printf '#!/usr/bin/env bash\nexit 143\n' > killed.sh && chmod +x killed.sh
+bash "$SCRIPT" --file guard.php --test-cmd ./killed.sh --allow-dirty --quiet \
+	--delete-matching 'current_user_can' >/dev/null 2>&1
+check "allow-dirty: restores after an interrupted runner" "$(same_as_dirty && echo 0 || echo 1)"
 git checkout -q -- guard.php
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh --allow-dirty \
+	--delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "allow-dirty on a clean file: works as usual" "$( [ "$STATUS" -eq 0 ] && clean_tree && echo 0 || echo 1)"
 
 # ---- 7. --replace and --dry-run
 OUT="$(bash "$SCRIPT" --file guard.php --dry-run \
@@ -237,6 +274,13 @@ OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./runner.sh \
 	--expect 'test_hides_invisible_items' --delete-matching 'current_user_can' 2>&1)"
 check "clean catch: no warning" "$(echo "$OUT" | grep -q 'WARNING' && echo 1 || echo 0)"
 check "broken/others: file restored" "$(clean_tree && echo 0 || echo 1)"
+
+# ---- 14. --help prints the whole leading comment block
+OUT="$(bash "$SCRIPT" --help 2>&1)"
+STATUS=$?
+check "help: exits 0" "$( [ "$STATUS" -eq 0 ] && echo 0 || echo 1 )"
+check "help: lists --allow-dirty" "$(echo "$OUT" | grep -q -- '--allow-dirty' && echo 0 || echo 1)"
+check "help: ends with the exit codes, not the code" "$(echo "$OUT" | tail -1 | grep -q 'setup error' && ! echo "$OUT" | grep -q 'pipefail' && echo 0 || echo 1)"
 
 echo ""
 echo "passed: $PASS  failed: $FAIL"

@@ -34,6 +34,13 @@
 #                      than the guard). Without it, other failures only warn
 #   --allow-errors     accept a run whose output shows the code itself broke
 #                      (see BROKEN_LINE); by default that is NOT CAUGHT
+#   --allow-dirty      accept a file with uncommitted changes — e.g. a fix that
+#                      is waiting at a confirmation gate and may not be committed
+#                      yet. The restore is then verified byte-for-byte against
+#                      the copy taken before the mutation (not against git), and
+#                      the uncommitted changes are kept. A hard kill (SIGKILL)
+#                      skips the restore, and git can no longer bring the file
+#                      back, so the path of that copy is printed to stderr first
 #   --dry-run          show the mutation diff, restore, and stop
 #   --quiet            only print the verdict
 #
@@ -75,6 +82,7 @@ FAILURE_LINE='^[[:space:]]*([0-9]+\)|×|✕|●|FAIL[[:space:]])'
 BROKEN_LINE='(Parse error|ParseError|syntax error, unexpected|(Class|Interface|Trait|Enum) "[^"]+" not found|Call to undefined (function|method)|Cannot redeclare|SyntaxError|ReferenceError)'
 ONLY=0
 ALLOW_ERRORS=0
+ALLOW_DIRTY=0
 DRY_RUN=0
 QUIET=0
 MUTATION=""
@@ -94,13 +102,14 @@ while [ $# -gt 0 ]; do
 		--failure-line) FAILURE_LINE="${2:-}"; shift 2 ;;
 		--only) ONLY=1; shift ;;
 		--allow-errors) ALLOW_ERRORS=1; shift ;;
+		--allow-dirty) ALLOW_DIRTY=1; shift ;;
 		--dry-run|-n) DRY_RUN=1; shift ;;
 		--quiet|-q) QUIET=1; shift ;;
 		--delete-matching) set_mutation delete-matching; ARG1="${2:-}"; shift 2 ;;
 		--replace) set_mutation replace; ARG1="${2:-}"; ARG2="${3:-}"; shift 3 ;;
 		--replace-file) set_mutation replace-file; ARG1="${2:-}"; ARG2="${3:-}"; shift 3 ;;
 		--apply) set_mutation apply; ARG1="${2:-}"; shift 2 ;;
-		-h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
 		*) die "unknown argument: $1" ;;
 	esac
 done
@@ -116,9 +125,14 @@ fi
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a git work tree"
 
-# The file has to start clean, or "restored" cannot be verified afterwards.
-if ! git diff --quiet -- "$FILE" 2>/dev/null || ! git diff --cached --quiet -- "$FILE" 2>/dev/null; then
-	die "$FILE has uncommitted changes; commit or stash them first so the restore can be verified"
+# By default the file has to start clean, so the restore can be checked against
+# git as well as against the copy below (and a hard kill leaves `git checkout`
+# as a way back). --allow-dirty drops that for a fix that may not be committed
+# yet; the copy is then the only reference.
+if [ "$ALLOW_DIRTY" -eq 0 ]; then
+	if ! git diff --quiet -- "$FILE" 2>/dev/null || ! git diff --cached --quiet -- "$FILE" 2>/dev/null; then
+		die "$FILE has uncommitted changes; commit or stash them first so the restore can be verified (or pass --allow-dirty)"
+	fi
 fi
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$1"; }
@@ -127,6 +141,9 @@ WORK_DIR="$(mktemp -d)"
 BACKUP="$WORK_DIR/$(basename "$FILE")"
 OUT_FILE="$WORK_DIR/out.txt"
 cp "$FILE" "$BACKUP"
+if [ "$ALLOW_DIRTY" -eq 1 ]; then
+	printf '%s: the pre-run copy of %s is %s (the only way back if this run is killed hard)\n' "$PROG" "$FILE" "$BACKUP" >&2
+fi
 
 RESTORED=0
 # Restoring and cleaning up are deliberately separate: the runner's output
@@ -138,6 +155,25 @@ restore() {
 	cp "$BACKUP" "$FILE"
 }
 cleanup() { restore; rm -rf "$WORK_DIR"; }
+# Byte-for-byte against the pre-run copy — valid with or without uncommitted
+# changes. A clean file must also still match git.
+is_restored() {
+	cmp -s "$BACKUP" "$FILE" || return 1
+	[ "$ALLOW_DIRTY" -eq 1 ] || git diff --quiet -- "$FILE"
+}
+# The mutation alone: against the pre-run copy when the file was dirty (git
+# would mix in the uncommitted changes), against git otherwise (unchanged output).
+show_diff() {
+	if [ "$ALLOW_DIRTY" -eq 1 ]; then
+		if [ "${1:-}" = "--stat" ]; then
+			printf ' %s | %s lines changed\n' "$FILE" "$(diff "$BACKUP" "$FILE" | grep -c '^[<>]')"
+		else
+			diff -u --label "a/$FILE" --label "b/$FILE" "$BACKUP" "$FILE"
+		fi
+	else
+		git --no-pager diff ${1:+"$1"} -- "$FILE"
+	fi
+}
 trap 'cleanup' EXIT
 trap 'cleanup; exit 2' INT TERM
 
@@ -191,32 +227,36 @@ apply_mutation || die "could not apply the mutation"
 
 # A mutation that changed nothing would let the tests pass for the wrong
 # reason and read as "the guard is covered". This is the trap worth catching.
-if git diff --quiet -- "$FILE"; then
+if cmp -s "$BACKUP" "$FILE"; then
 	die "the mutation changed nothing in $FILE — it did not match, so the run would prove nothing"
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
 	say "--- mutation (not run, will be restored) ---"
-	git --no-pager diff -- "$FILE"
+	show_diff
 	restore
-	git diff --quiet -- "$FILE" || die "RESTORE FAILED — $FILE still differs; recover it by hand"
+	is_restored || die "RESTORE FAILED — $FILE still differs; recover it by hand"
 	say "restored."
 	exit 0
 fi
 
 say "--- mutation applied to $FILE ---"
-[ "$QUIET" -eq 1 ] || git --no-pager diff --stat -- "$FILE"
+[ "$QUIET" -eq 1 ] || show_diff --stat
 say "--- running: $TEST_CMD ---"
 
 bash -c "$TEST_CMD" >"$OUT_FILE" 2>&1
 TEST_STATUS=$?
 
 restore
-if ! git diff --quiet -- "$FILE"; then
-	printf '%s: RESTORE FAILED — %s still differs from HEAD. Recover it by hand.\n' "$PROG" "$FILE" >&2
+if ! is_restored; then
+	printf '%s: RESTORE FAILED — %s still differs from its state before the run. Recover it by hand.\n' "$PROG" "$FILE" >&2
 	exit 2
 fi
-say "--- restored, working tree clean for $FILE ---"
+if [ "$ALLOW_DIRTY" -eq 1 ]; then
+	say "--- restored, $FILE is byte-identical to its state before the run (uncommitted changes kept) ---"
+else
+	say "--- restored, working tree clean for $FILE ---"
+fi
 
 # Collected once, without a pipe: `grep -q` closes the pipe on its first
 # match, which SIGPIPEs the upstream grep, and `pipefail` would then report

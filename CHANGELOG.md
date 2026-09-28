@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ### Added
+- `review-loop`: `mutate-check.sh --allow-dirty`。未コミットの変更があるファイルでも変異検証できる（「前提」章で commit が
+  許可されていない R2 や、dev-cycle の確認ゲート前の修正）。
+  - 復元の検証は、実行前の控えとの 1 バイト単位の比較（`cmp`）だけになり、未コミットの変更はそのまま残る。
+  - no-op の検出も控えとの比較で行い、dry-run の差分は変異の分だけを出す。
+  - 強制終了されると `git checkout` では戻せないため、控えの場所を最初に stderr へ出す。
+  - 既定（付けない時）は従来どおり clean なファイルに限り、`git diff` でも検証する。拒否時のメッセージで `--allow-dirty` を案内する。
+  - 背景: omotegae-project PR #81 で、確認ゲート前の修正を試すために退避→変異→復元を 2 回手書きし、
+    控えの置き場所を取り違えて復元に一度失敗した。
+  - `--help` はファイル冒頭のコメント全体を出すようにした（行番号の固定をやめた）。シナリオテストを 38 → 55 件に。
 - `review-loop`: `mutate-check.sh` が、変異がガードではなくコードを壊した実行（PHP の Parse error・
   `Class "…" not found`・`Call to undefined function`、JS の SyntaxError・ReferenceError）を BROKEN（exit 1）にする。
   `--expect` のテストが落ちていても捕捉と数えない（jp4wc-rakusync P1-S12 で、`use` の無いクラスへの差し替えが全テストを
