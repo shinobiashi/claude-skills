@@ -27,6 +27,11 @@ PRがマージされたら「そのタスクは完了」。次のタスクにき
 - 通常: `git switch <default>`（古い環境なら `git checkout <default>`）→ `git pull`。
 - **フォーク運用**: `git fetch upstream` → `git switch <default>` → `git merge --ff-only upstream/<default>` → `git push origin <default>` でフォークの default も同期する。
 - ここで未コミットの変更があれば停止してユーザーに確認。
+- **ローカルの `<default>` に未 push のコミットがあり、origin が先へ進んでいる（squash マージなどで分岐した）場合**、`git pull` は分岐エラーか不要なマージコミットになる。次の順で扱う:
+  1. `git fetch` してから `git log origin/<default>..<default> --oneline`（ローカルのみ）と `git log <default>..origin/<default> --oneline`（origin のみ）を確認する
+  2. ローカルのみのコミットの内容が既に origin に入っているかを確かめる: そのコミットが触ったファイルについて `git diff <default> origin/<default> -- <ファイル>` が**空**か。次の作業ブランチを未 push の `<default>` から切っていた場合、その PR のスカッシュに内容が含まれて入っていることがある（実例: cart-bridge-jp の PR #64 に、未 push だった PR #61 の蒸留コミットが混入した）
+  3. **内容が既に origin に含まれる** → `git pull --rebase`。重複コミットが「patch contents already upstream」で落ち、`<default>` が `origin/<default>` と一致する（何も失われない）。結果をユーザーに一言報告する
+  4. **含まれない（本当に未 push の作業）** → 勝手に rebase/reset せず、載せ替えてよいかユーザーに確認する
 
 ### 3. マージ済みブランチとworktreeを片付ける（承認必須）
 - `git branch --merged <default>` で対象がマージ済みか確認する（フォーク運用では `--merged upstream/<default>`）。
@@ -55,6 +60,7 @@ PRがマージされたら「そのタスクは完了」。次のタスクにき
   **リポジトリに `.claude/rules/*.md`（パス指定ルール）がある場合は、それも読み、領域固有の落とし穴は該当するルールファイルへ追記する**
   （どの領域にも効く汎用規約・アーキテクチャ原則だけ CLAUDE.md へ。分割済みの CLAUDE.md を再び肥大化させない）。差分の提示では追記先ファイルを明示する。
 - 追加と削除を**差分としてユーザーに提示** → 承認後に Edit で反映する。
+- 反映を `<default>` へ**直接コミットする場合（ドキュメントのみ）は、次の作業ブランチを切る前に push する**（承認の質問に「push もする」の選択肢を入れる）。未 push のまま `<default>` から作業ブランチを切ると、次の PR にこの蒸留コミットの変更が混入する（手順 2 の実例）。
 - 原則: CLAUDE.md は毎セッションの冒頭で読み込まれ context を消費する。**簡潔第一（目安200行以内）**。手順ものや特定ディレクトリだけに効く規則は CLAUDE.md に足さず、別スキル / スラッシュコマンド / `.claude/rules/` へ逃がすことを提案する。
 
 ### 5. 繰り返しパターンをコマンド化する（提案のみ）

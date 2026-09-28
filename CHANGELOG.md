@@ -64,6 +64,14 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- 配置側（`~/.claude/skills/`）にだけあった 2026-09-24 の編集を元本に取り込んだ（`install.sh` の `rsync --delete` で消えないように）:
+  - `dev-cycle`: 初回 push も `gate-round.sh push` で行い、出力の `T` を `--since` に使う。`git log --date=format:` で `T` を作ると
+    コミットのタイムゾーンのまま `Z` が付き、JST では 9 時間先になって `gate-threads.sh list/status` が 0 件を返すため
+  - `fix-copilot-review`: Copilot の新形式の本文（`<!-- ccr-overview-v2 -->`）に対応。スレッドの無い新規指摘の
+    `Previously missed (N)` を本文指摘として評価し、`gate-threads.sh` の `has_findings` に数える。承認系の見出しの下でも入りうる。
+    `bodies` はパスに混ざるゼロ幅スペース（U+200B）を除く
+  - `post-merge`: ローカルの default に未 push のコミットがあり origin が先へ進んだ時の扱い（内容が origin に含まれていれば
+    `git pull --rebase`、含まれなければ確認）と、蒸留を default へ直接コミットしたら次の作業ブランチを切る前に push すること
 - `review-loop`: `mutate-check.sh --expect` が Vitest / Jest の失敗見出し（`× name`・`FAIL  file > … > name`・
   `✕ name`・`● Suite › name`）を読めず、捕捉できていても「NOT CAUGHT BY THE NAMED TEST」になっていた（既定は PHPUnit の
   `1) Name` だけだった）。既定の `--failure-line` に加え、シナリオテストを 22 → 27 件に（ロケール C でも通る）。

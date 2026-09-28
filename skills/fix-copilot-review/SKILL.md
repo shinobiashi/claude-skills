@@ -191,11 +191,24 @@ query {
 `Copilot reviewed X out of Y changed files … and generated N comments.` の後に
 `<details><summary>Suppressed comments (N)</summary>` が続く）でも、指摘 1 件の書式は同じ。
 
+**新形式（`<!-- ccr-overview-v2 -->`）**では、`Suppressed comments` も `File summaries` も無く、次の `<details>` 節が
+並ぶ。判定見出し（`### 🟢 Approval recommended` を含む）と `**Findings:**`（重要度別の件数。`None` のこともある）の下に:
+
+| 節 | 意味 | 扱い |
+|---|---|---|
+| `Open (N)` | 未解決の指摘の一覧。各項目は `#discussion_r<dbid>` へのリンクで、`· New` が付くものが今回の新規スレッド | 既存スレッド（系統 A）の再掲。`dbid` を突合して重複として扱う |
+| `Previously missed (N)` | **スレッドの無い新規指摘**（変更していないコードへの指摘）。タイトル + `` `path:line` `` + 本文 | **本文指摘として `B<k>` を振って評価する**（下記 1）。判定が承認系（`🟢 Approval recommended`）でも入りうる |
+| `Resolved since last review (N)` | 前回の指摘の解消確認 | 指摘ではない |
+| `What changed in this PR` | ファイル要約の表 | ノイズ |
+
+`gate-threads.sh` の `status` / `bodies` は `Previously missed (` を含む本文を `has_findings` として数える。パスに混ざる
+ゼロ幅スペース（U+200B）は `bodies` が除去する（スレッドの `path` と突合するため）。
+
 本文から拾う指摘（以下「本文指摘」）:
 
-1. `Suppressed comments` 内の各 `**path:line**` + `* 本文` のブロック。
-   `Previously missed` の小見出し配下も含める（「前回から変わっていないコードに残る指摘」で、
-   Copilot がインライン投稿を見送っただけであり、未対応の指摘である）。
+1. `Suppressed comments` 内の各 `**path:line**` + `* 本文` のブロック、および新形式の `Previously missed (N)` 節の各項目。
+   `Previously missed` は「前回から変わっていないコードに残る指摘」で、
+   Copilot がインライン投稿を見送っただけであり、未対応の指摘である。
 2. `File summaries` 表のセルにある `**Critical / Moderate / Minor …:**` 付きの具体的指摘。
 3. 判定見出し直下の総評文（指摘の要約と、人間確認を求めているかどうかの判断材料）。
 

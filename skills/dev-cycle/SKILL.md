@@ -193,9 +193,13 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
 レビュー bot の起動もここでは行わない(CI 通過後に Step 6 で行う)。
 
 ```bash
-git push -u origin <ブランチ>
+G=<Base directory for this skill>/scripts/gate-round.sh
+"$G" push                    # 初回 push。`HEAD=<sha>` と `T=<UTC 時刻>` を出力する
 gh pr create --base main --title "<type>: <summary>" --body-file <本文ファイル>
 ```
+
+**初回 push も `gate-round.sh push` で行い、出力された `T` を控える**(`-u`/upstream 設定も面倒を見る)。
+Step 6 の `--since` に渡す値はすべてこの出力から取る(Step 6 の警告を参照)。
 
 PR 本文(日本語)は「プロジェクト設定の読み取り」で決めた項目(既定: 「対応フェーズ / 変更概要 /
 テスト内容 / 設計ドキュメントからの逸脱(あれば)」)に、review-loop のサマリ(ラウンド数・修正数・
@@ -227,9 +231,17 @@ green になってから依頼し、red なら何も依頼せずに exit 3 で�
 
 `sequential` 指定時は本節の同時依頼ではなく、下の「順番実行」節に従う。
 
-対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**に記録した UTC 時刻 `T`(Step 4 の
-初回 push、または前ラウンドの修正 push の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)`)を
-`--since` で渡す。依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
+対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**の UTC 時刻 `T` を `--since` で渡す。
+
+> **`T` は必ず `scripts/gate-round.sh push` の出力から取る**(初回 push も含む。Step 4 参照)。
+> あとから `git log` で作り直そうとすると取り違えやすい——`--date=format:%Y-%m-%dT%H:%M:%SZ` は
+> **コミット自身のタイムゾーンのまま**整形して末尾に `Z` を付けるだけなので、JST のコミットは
+> 9時間先の「UTC」になる(`format-local:` でないと UTC にならない)。実際にこれで `T` が未来になり、
+> `gate-threads.sh list/status` が新規指摘を1件も返さなかったことがある。bot の応答判定自体は
+> `commit_id` で行うので `request-gate-review.sh` は正常に応答を検出し、**スレッドだけが 0 件**という
+> 気づきにくい形で出る。手で作る場合は `TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd`。
+
+依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
 (手書きの `gh` ループに戻さない。理由は後述):
 
 ```bash

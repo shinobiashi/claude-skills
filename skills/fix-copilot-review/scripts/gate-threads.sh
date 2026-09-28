@@ -157,10 +157,15 @@ cmd_show() {
 # SINCE and would otherwise count as this round's findings.
 # `headline` is the verdict line ("### 🟡 Changes recommended");
 # `has_findings` is true when the body carries a Suppressed comments section,
-# a non-approving verdict, or a bold severity marker inside a File summaries
-# table cell (`**Moderate (1 vote):**`, `**Critical:**`, ...) — the last one
-# can appear even on a review whose only verdict text reads as neutral, i.e.
-# when there is something a round must read even with zero threads.
+# a "Previously missed (N)" section, a non-approving verdict, or a bold severity
+# marker inside a File summaries table cell (`**Moderate (1 vote):**`,
+# `**Critical:**`, ...) — the last two can appear even on a review whose only
+# verdict text reads as neutral, i.e. when there is something a round must read
+# even with zero threads. "Previously missed" is a top-level section of the v2
+# layout (`<!-- ccr-overview-v2 -->`, next to "Open (N)" / "Resolved since last
+# review" / "What changed in this PR"): findings in code that has not changed
+# since the last review, with no inline thread, and it can sit under an approving
+# headline ("🟢 Approval recommended") that the verdict test alone would miss.
 # `--paginate` pages are flattened with `jq -s`.
 # A review with no summary body has `body: null`; it is normalized to ""
 # so the parsing never aborts the whole listing.
@@ -184,7 +189,7 @@ copilot_reviews() {
 			submitted_at,
 			commit: .commit_id[0:7],
 			headline: ((.body | [match("###[^\n]*")] | .[0].string) // "(no headline)"),
-			has_findings: ((.body | test("Suppressed comments \\(")) or (.body | test("Changes recommended|Needs a closer look")) or (.body | test("\\*\\*(Critical|High|Moderate|Medium|Minor|Low)( \\(\\d+ votes?\\))?:\\*\\*"))),
+			has_findings: ((.body | test("Suppressed comments \\(")) or (.body | test("Previously missed \\(")) or (.body | test("Changes recommended|Needs a closer look")) or (.body | test("\\*\\*(Critical|High|Moderate|Medium|Minor|Low)( \\(\\d+ votes?\\))?:\\*\\*"))),
 			body
 		}'
 }
@@ -197,13 +202,15 @@ copilot_reviews() {
 # findings living only there, with nothing in Suppressed comments, and a
 # blanket `grep -v '^|'` silently discarded them. The review URL is printed
 # so a body-only finding can be cited in G<n>.md, where a thread URL would go.
+# Zero-width spaces (U+200B) that Copilot inserts into file paths are removed
+# so a finding's `path:line` can be matched against a thread's path.
 cmd_bodies() {
 	local pr="${1:?PR number required}" since="${2:-}" line
 
 	copilot_reviews "$pr" "$since" | while IFS= read -r line; do
 		jq -r '"=== review \(.id) \(.submitted_at) \(.commit) has_findings=\(.has_findings) ===\n\(.url)"' <<<"$line"
 		jq -r '.body' <<<"$line" \
-			| sed -e 's/<[^>]*>//g' \
+			| sed -e 's/<[^>]*>//g' -e $'s/\xe2\x80\x8b//g' \
 			| grep -v -e 'Get a fresh assessment' -e '^💡' -e '^[[:space:]]*$' \
 			| awk '!/^\|/ || /\*\*(Critical|High|Moderate|Medium|Minor|Low)( \([0-9]+ votes?\))?:\*\*/' \
 			|| true
