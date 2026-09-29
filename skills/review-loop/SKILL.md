@@ -242,7 +242,8 @@ M=<Base directory for this skill>/scripts/mutate-check.sh
 ```
 
 `--expect` が照合する「失敗の見出し」は、既定で PHPUnit（`1) Class::test`）・Vitest（`× name` /
-`FAIL  file > suite > name`）・Jest（`✕ name` / `● Suite › name`）。それ以外のランナーは `--failure-line <ERE>` で渡す。
+`FAIL  file > suite > name`）・Jest（`✕ name` / `● Suite › name`）。Jest がファイルごとに出す `FAIL <パス>` 行はテスト名を含まないので数えない
+（以前は数えていたため、狙ったテストだけが落ちても `--only` が「NOT CAUGHT CLEANLY」と誤判定した）。それ以外のランナーは `--failure-line <ERE>` で渡す。
 
 終了コード: `0` 捕捉できた（ガードは本当にテストされている） / `1` 捕捉できなかった
 （テストが通ってしまった、`--expect` と違うテストが落ちた、変異がコードを壊した〔BROKEN〕、
@@ -270,7 +271,7 @@ null の参照や型エラーは、ガードを外して正当に起きるので
 - **判定を言語化する**（CAUGHT / NOT CAUGHT / NOT CAUGHT BY THE NAMED TEST / BROKEN / NOT CAUGHT CLEANLY）。
   `--test-cmd` は対象テストに絞って渡す（判定は終了ステータスを見る）
 
-`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（55件）が走る
+`bash scripts/test-mutate-check.sh "$PWD/scripts/mutate-check.sh"` で本体のシナリオテスト（60件）が走る
 （引数は絶対パス。テストは作業用リポジトリへ `cd` するので、相対パスだと全件が落ちる）。
 
 ## R3: 最終ラウンド(R2 で APPROVE 条件[R1指摘の全解消 かつ 新規Critical/Highゼロ]を満たせなかった場合のみ)

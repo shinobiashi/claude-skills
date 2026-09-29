@@ -213,6 +213,50 @@ for runner in vitest jest; do
 done
 check "vitest/jest: file restored" "$(clean_tree && echo 0 || echo 1)"
 
+# ---- 11b. Jest prints a per-file "FAIL <path>" summary line that names no test.
+#      It must not count as a failing test (with --only it read as "another test
+#      failed", NOT CAUGHT CLEANLY, although only the named test had failed).
+#      Vitest's " FAIL  file > suite > name" does name a test and still counts.
+cat > jest-real.sh <<'EOF'
+#!/usr/bin/env bash
+if grep -q "current_user_can" guard.php; then
+	echo "PASS src/Guard.test.ts"
+	exit 0
+fi
+echo "FAIL src/Guard.test.ts"
+echo "  Guard"
+echo "    ✓ shows visible items (3 ms)"
+echo "    ✕ hides invisible items (5 ms)"
+echo ""
+echo "  ● Guard › hides invisible items"
+echo ""
+echo "Tests:       1 failed, 1 passed, 2 total"
+exit 1
+EOF
+cat > vitest-wide.sh <<'EOF'
+#!/usr/bin/env bash
+if grep -q "current_user_can" guard.php; then
+	exit 0
+fi
+echo " FAIL  assets/src/Guard.test.tsx > Guard > hides invisible items"
+echo " FAIL  assets/src/Guard.test.tsx > Guard > counts items"
+exit 1
+EOF
+chmod +x jest-real.sh vitest-wide.sh
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./jest-real.sh --only \
+	--expect 'hides invisible items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "jest FAIL line: --only is CAUGHT when only the named test failed" "$( [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q '^CAUGHT' && echo 0 || echo 1 )"
+check "jest FAIL line: not listed as a failing test" "$(echo "$OUT" | grep -q '^FAIL src/Guard.test.ts' && echo 1 || echo 0)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./jest-real.sh \
+	--expect 'hides invisible items' --delete-matching 'current_user_can' 2>&1)"
+check "jest FAIL line: no WARNING about other failing tests" "$(echo "$OUT" | grep -q 'WARNING' && echo 1 || echo 0)"
+OUT="$(bash "$SCRIPT" --file guard.php --test-cmd ./vitest-wide.sh --only \
+	--expect 'hides invisible items' --delete-matching 'current_user_can' 2>&1)"
+STATUS=$?
+check "vitest FAIL > name: another failing test still makes --only fail" "$( [ "$STATUS" -eq 1 ] && echo "$OUT" | grep -q 'NOT CAUGHT CLEANLY' && echo 0 || echo 1 )"
+check "jest/vitest FAIL lines: file restored" "$(clean_tree && echo 0 || echo 1)"
+
 # ---- 12. a mutation that breaks the code (fatal / parse error) is BROKEN,
 #      even though the named test is among the failures
 cat > fatal.sh <<'EOF'

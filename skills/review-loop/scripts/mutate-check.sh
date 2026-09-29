@@ -74,8 +74,11 @@ EXPECT=""
 # Failure headers that name the test: PHPUnit "1) Class::test", Vitest
 # "  × name 12ms" and " FAIL  file > suite > name", Jest "  ✕ name (5 ms)"
 # and "  ● Suite › name". Written as an alternation, not a bracket
-# expression, so the multi-byte marks match in any locale.
-FAILURE_LINE='^[[:space:]]*([0-9]+\)|×|✕|●|FAIL[[:space:]])'
+# expression, so the multi-byte marks match in any locale. A "FAIL" line only
+# counts when it names a test (" > "): Jest's per-file summary "FAIL <path>"
+# names none, and counting it made --only report the file itself as "another
+# failing test" (NOT CAUGHT CLEANLY) when only the named test had failed.
+FAILURE_LINE='^[[:space:]]*([0-9]+\)|×|✕|●|FAIL[[:space:]].*[[:space:]]>[[:space:]])'
 # The code did not load or compile: PHP parse errors and missing
 # classes / functions, JS syntax and reference errors. A null dereference or a
 # type error is left out on purpose: breaking a guard legitimately causes them.

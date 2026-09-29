@@ -73,6 +73,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `review-loop`: `mutate-check.sh` が Jest のファイル単位の要約行 `FAIL <パス>` を失敗したテストの見出しとして数えていたため、
+  狙ったテストだけが落ちても `--only` が「NOT CAUGHT CLEANLY」と誤判定していた。`FAIL` の行はテスト名を含む Vitest 形式
+  （`FAIL  file > suite > name`）だけを数える。シナリオテストに実際の Jest の出力形式と Vitest の他テスト失敗を追加（55 → 60 件）。
+  背景: cart-bridge-jp PR #87 の Jest 導入時に、`--only` を外して失敗一覧を目で確かめる回避をしていた。
 - 配置側（`~/.claude/skills/`）にだけあった 2026-09-24 の編集を元本に取り込んだ（`install.sh` の `rsync --delete` で消えないように）:
   - `dev-cycle`: 初回 push も `gate-round.sh push` で行い、出力の `T` を `--since` に使う。`git log --date=format:` で `T` を作ると
     コミットのタイムゾーンのまま `Z` が付き、JST では 9 時間先になって `gate-threads.sh list/status` が 0 件を返すため
