@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- `dev-env`: `scripts/verify-ports.sh`。起動中の wp-env が台帳のスロットで応答し、ほかのプロセスが割り込んでいないかを
+  確かめる: コンテナの公開ポートとスロットの一致、`127.0.0.1` と `localhost` の両方での到達、`/wp-admin/` の転送先、
+  `siteurl`、REST（`?rest_route=` だけなら WARN）、待ち受けプロセス（`lsof +c 0`）。4 リポジトリの移行で手書きした
+  確認を 4 回繰り返したため切り出した。docker / curl / npx を `DEV_ENV_*` で差し替えるシナリオテスト
+  `test-verify-ports.sh`（40 件）。SKILL.md の新規・移行手順と wc-wp-env の手順 6 から呼ぶ。
 - `dev-env`: ローカル開発環境のポート台帳を一元管理する新スキル。wp-env を使う各リポジトリに 10 ポートの「スロット」
   （`10000 + NN×10`。+0/+1 が development/tests の WordPress、+2/+3 が phpMyAdmin、+4〜+9 は予備。08 は 10080 が
   ブラウザに拒否されるため欠番）を割り当て、8881〜8999 を WordPress Studio 専用として wp-env から外す。

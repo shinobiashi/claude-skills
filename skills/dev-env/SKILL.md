@@ -25,7 +25,8 @@ compatibility: "@wordpress/env 10.39 / 11.15、WordPress Studio 1.22.0、macOS �
 |---|---|
 | `<skill>/ports.json` | 台帳。1 行 = 1 リポジトリ（`slot` と、`~/Dev` からの相対パス `repo`。任意で `note`） |
 | `<skill>/scripts/ports.js` | 台帳の参照・登録と、全リポジトリ・Studio・LISTEN 中のポートとの照合 |
-| `<skill>/scripts/test-ports.sh` | `ports.js` のシナリオテスト（ネットワーク不要）。スクリプトを直したら通す |
+| `<skill>/scripts/verify-ports.sh` | 起動中の wp-env が台帳のスロットで応答し、ほかのプロセスが割り込んでいないかを確かめる（移行・構築の完了確認） |
+| `<skill>/scripts/test-ports.sh` / `test-verify-ports.sh` | 2 つのスクリプトのシナリオテスト（Docker・ネットワーク不要）。スクリプトを直したら通す |
 
 ## ポート設計
 
@@ -98,6 +99,24 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
   ほかに、Studio のサイトが 10000 番台に入っていれば ERROR、スロットのポートを Docker 以外のプロセスが
   LISTEN していれば WARN を出す。`--strict` は WARN と `pending` も exit 1 にする。
 
+起動中の環境を確かめるのは `verify-ports.sh`（リポジトリのルートで、環境を起動した状態で実行する）:
+
+```bash
+bash <skill>/scripts/verify-ports.sh             # development + tests
+bash <skill>/scripts/verify-ports.sh --dev-only  # tests 環境を見ない
+```
+
+| 確認すること | 失敗の意味 |
+|---|---|
+| コンテナが公開しているポートがスロットと一致する（WordPress・tests・phpMyAdmin があれば） | `.wp-env.json` が未移行、または移行後に再起動していない |
+| `127.0.0.1` と `localhost` の両方でログイン画面・tests サイトに届く | `localhost`（ブラウザは `::1` を先に試す）だけ別のサーバーに繋がっている |
+| `/wp-admin/` が同じポートのログイン画面へ転送される | Studio などのサイトが `[::1]` で同じ番号を待ち受けている（lsof に映らない場合も、ここで分かる） |
+| `siteurl` が development・tests ともそのポート | 再起動していない |
+| REST API が `/wp-json/` で応答する | `?rest_route=` だけ応答するなら WARN（パーマリンクが「基本」。`/wp-json/` 形式で登録した OAuth の callback と食い違う） |
+| そのポートを待ち受けているのがコンテナランタイムだけ | ほかのプロセスが同じ番号を持っている |
+
+  FAIL が 1 つでもあれば exit 1。台帳に無いリポジトリ・起動していない環境も FAIL。
+
 ## 手順
 
 ### 新しいリポジトリ（wc-wp-env の手順 3 から呼ばれる）
@@ -105,6 +124,7 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
 1. `node <skill>/scripts/ports.js assign "$PWD"` を実行する。元本の台帳に 1 行追記され、ポートが JSON で出力される。
 2. 出力されたポートを `.wp-env.json` に書く。
 3. `bash ~/Dev/claude-skills/install.sh dev-env` で配置し、claude-skills の差分（`ports.json` の 1 行）を報告する。
+4. 起動したら `bash <skill>/scripts/verify-ports.sh` が FAIL 無しで通ることを確かめる。
 
 テンプレートから作ったリポジトリは、テンプレートのスロットのポートを `.wp-env.json` ごと引き継いでいる。
 `check` が ERROR にするので、`assign` で新しいスロットを取り、書き換える。
@@ -138,7 +158,8 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
 5. 起動中なら `npx wp-env stop` → `npx wp-env start` で新しいポートに切り替わる（`WP_HOME` / `WP_SITEURL` は
    wp-env が起動時にポートから設定する）。記事本文などに保存済みの旧ポートの URL は残る。直すなら承認を得てから
    `wp search-replace`。
-6. `check` でそのリポジトリが `ok` になることを確かめる。E2E のワークフローが PR では走らない（夜間・手動実行のみの）
+6. `check` でそのリポジトリが `ok` になり、起動した環境で `verify-ports.sh` が FAIL 無しで通ることを確かめる
+   （Docker が止まっていて起動できないときは、その旨を報告する）。E2E のワークフローが PR では走らない（夜間・手動実行のみの）
    リポジトリなら、マージ後に `gh workflow run <ワークフロー> --ref main` で一度流し、新しいポートで通ることを確かめる。
 
 ### 台帳からリポジトリを外す

@@ -176,6 +176,8 @@ bash <skill>/scripts/verify-env.sh --dev-only
   握りつぶさず、対処方法と一緒に報告する。
 - 冪等性も確かめる: `bash bin/wp-env-setup.sh` をもう一度実行し、すべて `already exists, skipping.` に
   なること。
+- ポートも確かめる: `bash <skill>/../dev-env/scripts/verify-ports.sh`。台帳のスロットで応答しているか、
+  `localhost` が Studio などの別サイトに繋がっていないかを見る（verify-env.sh は HTTP 200 しか見ない）。
 
 ### 7. 周辺との整合を取る
 
