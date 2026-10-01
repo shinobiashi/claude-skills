@@ -141,6 +141,56 @@ expect_has "check: another process on a slot port warns" "$out" 'WARN: 10010 (sl
 out=$(DEV_ENV_LSOF_OUTPUT="$W/lsof-studio.txt" run check --strict); rc=$?
 expect_exit "check --strict: that warning fails the run" $rc 1
 
+echo "ps"
+HOME_WPENV="$W/wpenv-home"
+mkdir -p "$HOME_WPENV"
+md5of() { node -e 'process.stdout.write(require("crypto").createHash("md5").update(process.argv[1]).digest("hex"))' "$1/.wp-env.json"; }
+H_ALPHA=$(md5of "$ROOT/alpha")
+H_BETA=$(md5of "$ROOT/beta")
+H_TRUNK=$(md5of "$ROOT/nested/trunk")
+D_TRUNK="wp-env-trunk-${H_TRUNK:0:8}"
+mkdir -p "$HOME_WPENV/$H_ALPHA" "$HOME_WPENV/$H_BETA" "$HOME_WPENV/$D_TRUNK" "$HOME_WPENV/wp-env-zeta-variant-0badc0de" "$HOME_WPENV/0123456789abcdef0123456789abcdef"
+cat > "$W/docker-ps.txt" <<EOF2
+${H_ALPHA}-wordpress-1	${H_ALPHA}	$HOME_WPENV/${H_ALPHA}	wordpress	0.0.0.0:10010->80/tcp, [::]:10010->80/tcp
+${H_ALPHA}-tests-wordpress-1	${H_ALPHA}	$HOME_WPENV/${H_ALPHA}	tests-wordpress	0.0.0.0:10011->80/tcp
+${H_ALPHA}-mysql-1	${H_ALPHA}	$HOME_WPENV/${H_ALPHA}	mysql	0.0.0.0:61000->3306/tcp
+${H_BETA}-wordpress-1	${H_BETA}	$HOME_WPENV/${H_BETA}	wordpress	0.0.0.0:8888->80/tcp
+${H_BETA}-tests-wordpress-1	${H_BETA}	$HOME_WPENV/${H_BETA}	tests-wordpress	0.0.0.0:8889->80/tcp
+${D_TRUNK}-wordpress-1	${D_TRUNK}	$HOME_WPENV/${D_TRUNK}	wordpress	0.0.0.0:10070->80/tcp
+${D_TRUNK}-tests-wordpress-1	${D_TRUNK}	$HOME_WPENV/${D_TRUNK}	tests-wordpress	0.0.0.0:10071->80/tcp
+wp-env-zeta-variant-0badc0de-wordpress-1	wp-env-zeta-variant-0badc0de	$HOME_WPENV/wp-env-zeta-variant-0badc0de	wordpress	0.0.0.0:10060->80/tcp
+myapp-web-1	myapp	/Users/me/myapp	web	0.0.0.0:3000->3000/tcp
+EOF2
+cat > "$W/stub-docker" <<'EOF2'
+#!/usr/bin/env bash
+case "$1" in
+	ps) cat "$STUB_PS" ;;
+	inspect) c="${@: -1}"; [ "$c" = "wp-env-zeta-variant-0badc0de-wordpress-1" ] && printf '/host_mnt%s\n/var/lib/docker/volumes/x/_data\n' "$STUB_ZETA" ;;
+esac
+EOF2
+chmod +x "$W/stub-docker"
+ps_run() { STUB_PS="$W/docker-ps.txt" STUB_ZETA="$ROOT/zeta" DEV_ENV_DOCKER="$W/stub-docker" WP_ENV_HOME="$HOME_WPENV" run ps "$@"; }
+# ps_row <name> <output> <instance> <repo> <slot> <state> [substring]
+ps_row() {
+	local line
+	line=$(printf '%s\n' "$2" | grep -E "^$3 +$4 +$5 +$6( |\$)")
+	if [ -n "$line" ] && { [ -z "${7:-}" ] || printf '%s' "$line" | grep -qF -- "$7"; }; then ok "$1"; else bad "$1 (no row: $3 $4 $5 $6 ${7:-})"; printf '%s\n' "$2" | sed 's/^/        /'; fi
+}
+out=$(ps_run); rc=$?
+expect_exit "ps: exits 0" $rc 0
+ps_row "ps: legacy md5 name → repo, on its slot" "$out" "$H_ALPHA" alpha 01 running "10010/10011"
+ps_row "ps: an instance off its slot is flagged" "$out" "$H_BETA" beta 02 running "not on slot 02 (10020/10021)"
+ps_row "ps: descriptive wp-env-<dir>-<hash> name → repo" "$out" "$D_TRUNK" nested/trunk 07 running "10070/10071"
+ps_row "ps: unmatched name falls back to the WordPress container's mounts" "$out" wp-env-zeta-variant-0badc0de zeta 06 running "matched by its mounts"
+expect_not "ps: other compose projects are ignored" "$out" "myapp"
+expect_not "ps: stopped instances need --all" "$out" "0123456789abcdef0123456789abcdef"
+expect_not "ps: mysql's port is not shown as a web port" "$out" "61000"
+out=$(ps_run --all); rc=$?
+ps_row "ps --all: a directory without a repository is listed as stopped" "$out" 0123456789abcdef0123456789abcdef '\?' -- stopped "no repository found"
+out=$(STUB_PS=/dev/null DEV_ENV_DOCKER="$W/missing-docker" WP_ENV_HOME="$HOME_WPENV" run ps); rc=$?
+expect_exit "ps: docker unreachable still exits 0" $rc 0
+expect_has "ps: docker unreachable is reported" "$out" "WARN: docker is not reachable"
+
 echo "assign"
 cp "$LEDGER" "$W/ledger.before"
 repo fresh '{ "plugins": [ "." ] }'

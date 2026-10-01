@@ -1,6 +1,6 @@
 ---
 name: dev-env
-description: ローカル開発環境のポート台帳を一元管理するスキル。wp-env を使う各リポジトリに 10 ポートずつの「スロット」を割り当て、WordPress Studio（8881〜）や macOS・Xdebug などと衝突しないようにする。台帳（ports.json）と照合スクリプト（ports.js）を同梱。「ポートを割り当てて」「ポートが衝突する」「port is already allocated」「wp-env が起動しない」「Studio とぶつかる」「localhost で別のサイトが出る」「wp-env のポートを移行して」「ポート台帳」「開発環境のポート」などと言われたら使う。wp-env を新しく構築するときは wc-wp-env の手順 3 からこのスキルのスクリプトを使う。
+description: ローカル開発環境のポート台帳を一元管理するスキル。wp-env を使う各リポジトリに 10 ポートずつの「スロット」を割り当て、WordPress Studio（8881〜）や macOS・Xdebug などと衝突しないようにする。台帳（ports.json）と照合スクリプト（ports.js）を同梱。「ポートを割り当てて」「ポートが衝突する」「port is already allocated」「wp-env が起動しない」「Studio とぶつかる」「localhost で別のサイトが出る」「Docker Desktop のコンテナがどのリポジトリかわからない」「wp-env のポートを移行して」「ポート台帳」「開発環境のポート」などと言われたら使う。wp-env を新しく構築するときは wc-wp-env の手順 3 からこのスキルのスクリプトを使う。
 compatibility: "@wordpress/env 10.39 / 11.15、WordPress Studio 1.22.0、macOS で確認（2026-10-01）。wp-env の設定の解釈は node_modules/@wordpress/env/lib/config/ を正とする。"
 ---
 
@@ -24,7 +24,7 @@ compatibility: "@wordpress/env 10.39 / 11.15、WordPress Studio 1.22.0、macOS �
 | ファイル | 役割 |
 |---|---|
 | `<skill>/ports.json` | 台帳。1 行 = 1 リポジトリ（`slot` と、`~/Dev` からの相対パス `repo`。任意で `note`） |
-| `<skill>/scripts/ports.js` | 台帳の参照・登録と、全リポジトリ・Studio・LISTEN 中のポートとの照合 |
+| `<skill>/scripts/ports.js` | 台帳の参照・登録、全リポジトリ・Studio・LISTEN 中のポートとの照合、起動中の wp-env とリポジトリの対応表 |
 | `<skill>/scripts/verify-ports.sh` | 起動中の wp-env が台帳のスロットで応答し、ほかのプロセスが割り込んでいないかを確かめる（移行・構築の完了確認） |
 | `<skill>/scripts/test-ports.sh` / `test-verify-ports.sh` | 2 つのスクリプトのシナリオテスト（Docker・ネットワーク不要）。スクリプトを直したら通す |
 
@@ -79,6 +79,7 @@ node <skill>/scripts/ports.js list               # 台帳の一覧（スロッ�
 node <skill>/scripts/ports.js get [<repo>]       # そのリポジトリのポート（JSON）。未登録なら exit 4
 node <skill>/scripts/ports.js assign [<repo>]    # 空いている最小のスロットに登録（登録済みなら何もしない）
 node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定・Studio・LISTEN 中のポートを台帳と照合
+node <skill>/scripts/ports.js ps [--all]         # 起動中の wp-env がどのリポジトリか（--all は停止中も）
 ```
 
 - `<repo>` はディレクトリ（省略時はカレント）か台帳のキー（`~/Dev` からの相対パス。例 `cart-bridge-jp`、
@@ -98,6 +99,21 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
 
   ほかに、Studio のサイトが 10000 番台に入っていれば ERROR、スロットのポートを Docker 以外のプロセスが
   LISTEN していれば WARN を出す。`--strict` は WARN と `pending` も exit 1 にする。
+
+`ps` は、Docker Desktop のコンテナ一覧に出るグループ名（wp-env のインスタンス名）とリポジトリ・スロット・
+公開ポートの対応を出す。
+
+- インスタンス名は `~/.wp-env/`（`WP_ENV_HOME`）の下のディレクトリ名で、Docker Compose のプロジェクト名になる。
+  旧形式は設定ファイルのパスの MD5（32 桁）、@wordpress/env 11 系（11.15 で確認。10.39 は旧形式）で新しく作った
+  環境は `wp-env-<リポジトリのディレクトリ名>-<MD5 の先頭 8 桁>`。`ps` は各リポジトリの両方の名前を計算して照合し、
+  一致しなければ WordPress コンテナのマウント元で探す（`matched by its mounts`）。
+- スロットと違うポートで動いていれば `not on slot NN`。`--all` は停止中のインスタンスも並べ、リポジトリが見つからない
+  ディレクトリ（削除・移動したチェックアウトの名残）は `no repository found` と出る。
+- 旧形式のまま 11 系に上げても名前は変わらない（ディレクトリがあれば旧形式を使い続ける）。新形式にするには
+  `npx wp-env cleanup` で作り直す必要があり、DB は空になる（ボリュームもプロジェクト名ごと）。残すなら先に
+  `wp db export` する。`AUTH_KEY` / `AUTH_SALT` も作り直しで変わるので、それを鍵にした暗号化データ
+  （cart-bridge-jp の `TokenStore` など）は復号できなくなる。急がない: ポートはスロットで固定済みなので、
+  Docker Desktop の Port(s) 列と `ps` で見分けられる。
 
 起動中の環境を確かめるのは `verify-ports.sh`（リポジトリのルートで、環境を起動した状態で実行する）:
 

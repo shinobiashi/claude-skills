@@ -8,6 +8,9 @@
  *   node ports.js assign [<repo>]       register <repo> in the lowest free slot (no-op when registered)
  *   node ports.js check [--strict]      compare every repo's wp-env config, Studio's sites and the
  *                                       ports listening right now against the ledger
+ *   node ports.js ps [--all]            name the repository behind each running wp-env instance (the
+ *                                       hash or wp-env-<repo>-<hash> that Docker Desktop groups its
+ *                                       containers by); --all adds instances on disk that are stopped
  *
  * Options:
  *   --root <dir>     where repositories live (repeatable; default ~/Dev). A repo's ledger key is
@@ -17,6 +20,9 @@
  *                    checkout ($CLAUDE_SKILLS_REPO or ~/Dev/claude-skills)/skills/dev-env/ports.json,
  *                    else the copy next to this script.
  *   --studio <file>  Studio's site list (default ~/.studio/cli.json, then the older appdata-v1.json)
+ *
+ * Environment: WP_ENV_HOME (wp-env's instance directory, default ~/.wp-env). Test seams:
+ * DEV_ENV_DOCKER names a substitute docker command, DEV_ENV_LSOF_OUTPUT a file of lsof output.
  *
  * <repo> is a directory (default: cwd) or a ledger key such as "cart-bridge-jp".
  *
@@ -32,7 +38,8 @@
 const fs = require( 'fs' );
 const os = require( 'os' );
 const path = require( 'path' );
-const { execSync } = require( 'child_process' );
+const crypto = require( 'crypto' );
+const { execSync, execFileSync } = require( 'child_process' );
 
 const BASE = 10000;
 const SLOT_SIZE = 10;
@@ -57,7 +64,7 @@ const CONTAINER_LISTENER = /docke|vpnkit|orbstack|colima|lima|podman|rancher|qem
 // ---------------------------------------------------------------------------- arguments
 
 function parseArgs( argv ) {
-	const args = { command: null, target: null, roots: [], depth: 3, ledger: null, studio: null, strict: false };
+	const args = { command: null, target: null, roots: [], depth: 3, ledger: null, studio: null, strict: false, all: false };
 	for ( let i = 0; i < argv.length; i++ ) {
 		const a = argv[ i ];
 		const value = () => {
@@ -76,6 +83,8 @@ function parseArgs( argv ) {
 			args.studio = path.resolve( expandHome( value() ) );
 		} else if ( a === '--strict' ) {
 			args.strict = true;
+		} else if ( a === '--all' ) {
+			args.all = true;
 		} else if ( a === '-h' || a === '--help' ) {
 			printHelp();
 			process.exit( 0 );
@@ -89,7 +98,7 @@ function parseArgs( argv ) {
 			usage( `Unexpected argument: ${ a }` );
 		}
 	}
-	if ( ! [ 'list', 'get', 'assign', 'check' ].includes( args.command ) ) {
+	if ( ! [ 'list', 'get', 'assign', 'check', 'ps' ].includes( args.command ) ) {
 		usage( args.command === null ? 'Missing command' : `Unknown command: ${ args.command }` );
 	}
 	if ( ! Number.isInteger( args.depth ) || args.depth < 0 ) {
@@ -418,6 +427,49 @@ function listeners() {
 	return { map, ok: lsof === '' };
 }
 
+// wp-env keeps each environment in <WP_ENV_HOME or ~/.wp-env>/<name>, and Docker Compose takes the
+// project name (the group Docker Desktop shows) from that directory. The name is md5 of the config
+// file's path (the legacy form, kept for as long as that directory exists) or, for environments that
+// @wordpress/env 11.x creates, wp-env-<directory name>-<the first 8 hex digits of that md5>.
+function wpEnvHome() {
+	return path.resolve( expandHome( process.env.WP_ENV_HOME || path.join( os.homedir(), '.wp-env' ) ) );
+}
+
+function instanceNamesFor( dir ) {
+	const dirs = [ dir ];
+	try {
+		const real = fs.realpathSync( dir );
+		if ( real !== dir ) {
+			dirs.push( real );
+		}
+	} catch ( e ) {
+		// The scan found this directory a moment ago; the plain path is enough.
+	}
+	const names = new Set();
+	for ( const d of dirs ) {
+		const hash = crypto.createHash( 'md5' ).update( path.join( d, '.wp-env.json' ) ).digest( 'hex' );
+		names.add( hash );
+		names.add( `wp-env-${ path.basename( d ) }-${ hash.slice( 0, 8 ) }` );
+	}
+	return names;
+}
+
+function docker( dockerArgs ) {
+	try {
+		return execFileSync( process.env.DEV_ENV_DOCKER || 'docker', dockerArgs, {
+			encoding: 'utf8',
+			stdio: [ 'ignore', 'pipe', 'ignore' ],
+		} );
+	} catch ( e ) {
+		return null;
+	}
+}
+
+function publishedWebPort( ports ) {
+	const m = ( ports || '' ).match( /:(\d+)->80\/tcp/ );
+	return m ? Number( m[ 1 ] ) : null;
+}
+
 // ---------------------------------------------------------------------------- commands
 
 function cmdList( args ) {
@@ -679,7 +731,129 @@ function cmdCheck( args ) {
 	process.exit( errors.length || ( args.strict && ( warnings.length || count( 'pending' ) ) ) ? 1 : 0 );
 }
 
+function cmdPs( args ) {
+	const { byRepo } = loadLedger( ledgerPath( args ) );
+	const repos = scanRepos( args.roots, args.depth );
+	const home = wpEnvHome();
+	const byName = new Map();
+	for ( const [ key, info ] of repos ) {
+		for ( const name of instanceNamesFor( info.dir ) ) {
+			byName.set( name, key );
+		}
+	}
+
+	// Running containers, grouped by the wp-env instance (compose project) they belong to.
+	const format = [
+		'{{.Names}}',
+		'{{.Label "com.docker.compose.project"}}',
+		'{{.Label "com.docker.compose.project.working_dir"}}',
+		'{{.Label "com.docker.compose.service"}}',
+		'{{.Ports}}',
+	].join( '\t' );
+	const listing = docker( [ 'ps', '--format', format ] );
+	const instances = new Map();
+	for ( const line of ( listing || '' ).split( '\n' ) ) {
+		const [ container, project, workdir, service, ports ] = line.split( '\t' );
+		if ( ! container || ! service ) {
+			continue;
+		}
+		const inHome = workdir && path.resolve( workdir ).startsWith( home + path.sep );
+		if ( ! inHome && ! /^([0-9a-f]{32}|wp-env-.+)$/.test( project || '' ) ) {
+			continue; // some other compose project
+		}
+		const name = inHome ? path.basename( workdir ) : project;
+		if ( ! instances.has( name ) ) {
+			instances.set( name, { name, running: true, services: new Map() } );
+		}
+		instances.get( name ).services.set( service, { container, port: publishedWebPort( ports ) } );
+	}
+	if ( args.all ) {
+		let entries = [];
+		try {
+			entries = fs.readdirSync( home, { withFileTypes: true } );
+		} catch ( e ) {
+			entries = [];
+		}
+		for ( const entry of entries ) {
+			if ( entry.isDirectory() && ! instances.has( entry.name ) ) {
+				instances.set( entry.name, { name: entry.name, running: false, services: new Map() } );
+			}
+		}
+	}
+
+	// A config file under another name (a variant, a moved checkout) breaks the hash match; the
+	// WordPress container's bind mounts still point at the repository.
+	const byMount = ( inst ) => {
+		const svc = inst.services.get( 'wordpress' ) || [ ...inst.services.values() ][ 0 ];
+		const mounts = svc ? docker( [ 'inspect', '--format', '{{range .Mounts}}{{.Source}}{{"\\n"}}{{end}}', svc.container ] ) : null;
+		const sources = ( mounts || '' ).split( '\n' ).map( ( m ) => m.replace( /^\/host_mnt(?=\/)/, '' ) ).filter( Boolean );
+		let best = null;
+		for ( const [ key, info ] of repos ) {
+			const dir = info.dir;
+			if ( sources.some( ( src ) => src === dir || src.startsWith( dir + path.sep ) ) && ( ! best || dir.length > repos.get( best ).dir.length ) ) {
+				best = key;
+			}
+		}
+		return best;
+	};
+
+	const rows = [];
+	for ( const inst of instances.values() ) {
+		let key = byName.get( inst.name ) || null;
+		const notes = [];
+		if ( ! key && inst.running ) {
+			key = byMount( inst );
+			if ( key ) {
+				notes.push( 'matched by its mounts' );
+			}
+		}
+		const slot = key ? byRepo.get( key ) : undefined;
+		const port = ( service ) => ( inst.services.get( service ) || {} ).port ?? null;
+		const dev = port( 'wordpress' );
+		const tests = port( 'tests-wordpress' );
+		const pma = [ port( 'phpmyadmin' ), port( 'tests-phpmyadmin' ) ];
+		if ( ! key ) {
+			notes.push( inst.running ? `no repository under ${ args.roots.join( ', ' ) }` : 'no repository found (left over from a moved or deleted checkout?)' );
+		} else if ( ! slot ) {
+			notes.push( 'not in the ledger' );
+		} else if ( inst.running ) {
+			const want = slotPorts( slot );
+			if ( dev !== want.port || ( tests !== null && tests !== want.testsPort ) ) {
+				notes.push( `not on slot ${ pad( slot ) } (${ want.port }/${ want.testsPort })` );
+			}
+		}
+		rows.push( {
+			name: inst.name,
+			repo: key || '?',
+			slot: slot ? pad( slot ) : '--',
+			state: inst.running ? 'running' : 'stopped',
+			web: inst.running ? `${ dev ?? '-' }/${ tests ?? '-' }` : '-',
+			pma: pma.some( ( p ) => p !== null ) ? pma.map( ( p ) => p ?? '-' ).join( '/' ) : '-',
+			note: notes.join( '; ' ),
+			order: [ inst.running ? 0 : 1, slot ?? 1000 ],
+		} );
+	}
+	rows.sort( ( a, b ) => a.order[ 0 ] - b.order[ 0 ] || a.order[ 1 ] - b.order[ 1 ] || a.name.localeCompare( b.name ) );
+
+	if ( listing === null ) {
+		console.log( 'WARN: docker is not reachable — running instances are not shown' + ( args.all ? '' : ' (add --all for the ones on disk)' ) );
+	}
+	if ( ! rows.length ) {
+		console.log( args.all ? `No wp-env instances in ${ home }.` : 'No wp-env instance is running.' );
+		return;
+	}
+	const w = ( field, title ) => Math.max( title.length, ...rows.map( ( r ) => r[ field ].length ) );
+	const cols = [ [ 'name', 'INSTANCE' ], [ 'repo', 'REPO' ], [ 'slot', 'SLOT' ], [ 'state', 'STATE' ], [ 'web', 'WEB dev/tests' ], [ 'pma', 'PMA dev/tests' ] ];
+	const widths = cols.map( ( [ f, t ] ) => w( f, t ) );
+	console.log( cols.map( ( [ , t ], i ) => t.padEnd( widths[ i ] ) ).join( '  ' ) + '  NOTE' );
+	for ( const r of rows ) {
+		console.log( ( cols.map( ( [ f ], i ) => r[ f ].padEnd( widths[ i ] ) ).join( '  ' ) + ( r.note ? `  ${ r.note }` : '' ) ).trimEnd() );
+	}
+	console.log( '' );
+	console.log( `Docker Desktop groups each instance's containers under its INSTANCE name (${ home }/<INSTANCE>).` );
+}
+
 // ---------------------------------------------------------------------------- main
 
 const args = parseArgs( process.argv.slice( 2 ) );
-( { list: cmdList, get: cmdGet, assign: cmdAssign, check: cmdCheck } )[ args.command ]( args );
+( { list: cmdList, get: cmdGet, assign: cmdAssign, check: cmdCheck, ps: cmdPs } )[ args.command ]( args );

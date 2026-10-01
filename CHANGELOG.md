@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- `dev-env`: `ports.js ps [--all]`。Docker Desktop がコンテナをまとめて表示するグループ名（wp-env のインスタンス名 =
+  `~/.wp-env/` の下のディレクトリ名。旧形式の MD5、または @wordpress/env 11 系の `wp-env-<dir>-<hash8>`）から、
+  リポジトリ・スロット・公開ポートを引く。両方の名前を設定ファイルのパスから計算して照合し、合わなければ
+  WordPress コンテナのマウント元（`/host_mnt` を除く）で探す。スロット外のポートは `not on slot NN`、`--all` は
+  停止中と持ち主の無いディレクトリも出す。シナリオテストを 64 → 75 件に（`DEV_ENV_DOCKER` で docker を差し替え）。
 - `dev-env`: `scripts/verify-ports.sh`。起動中の wp-env が台帳のスロットで応答し、ほかのプロセスが割り込んでいないかを
   確かめる: コンテナの公開ポートとスロットの一致、`127.0.0.1` と `localhost` の両方での到達、`/wp-admin/` の転送先、
   `siteurl`、REST（`?rest_route=` だけなら WARN）、待ち受けプロセス（`lsof +c 0`）。4 リポジトリの移行で手書きした
