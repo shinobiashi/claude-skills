@@ -89,6 +89,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `dev-env`: `ports.js check` が Docker Desktop の待ち受け（`com.docker.backend`）を「コンテナ以外のプロセス」と誤って
+  WARN にしていた。`lsof` は既定でコマンド名を 9 文字（`com.docke`）に切り詰めるため、`docker` の一致判定に掛からなかった。
+  `lsof +c 0` で全体を取り、判定も `docke` で行う。4 リポジトリを同時に起動した実機の照合で発見。
+  テスト用に `DEV_ENV_LSOF_OUTPUT`（lsof 出力のファイル）で実コマンドを差し替えられるようにし、シナリオを 59 → 64 件に。
 - `review-loop`: `mutate-check.sh` が Jest のファイル単位の要約行 `FAIL <パス>` を失敗したテストの見出しとして数えていたため、
   狙ったテストだけが落ちても `--only` が「NOT CAUGHT CLEANLY」と誤判定していた。`FAIL` の行はテスト名を含む Vitest 形式
   （`FAIL  file > suite > name`）だけを数える。シナリオテストに実際の Jest の出力形式と Vitest の他テスト失敗を追加（55 → 60 件）。

@@ -121,6 +121,26 @@ out=$(node "$SCRIPT" check --root "$ROOT" --ledger "$LEDGER" --studio "$W/studio
 expect_exit "check: Studio site inside the wp-env band exits 1" $rc 1
 expect_has "check: names the Studio site" "$out" 'Studio site "Moved" uses 10095'
 
+echo "check: listeners"
+# Docker Desktop shows up as com.docker.backend, or "com.docke" when lsof truncates the name.
+cat > "$W/lsof-docker.txt" <<'EOF2'
+COMMAND            PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+com.docke        12345 me    100u  IPv6 0x1      0t0  TCP *:10010 (LISTEN)
+com.docker.backend 12345 me  101u  IPv6 0x2      0t0  TCP *:10011 (LISTEN)
+EOF2
+out=$(DEV_ENV_LSOF_OUTPUT="$W/lsof-docker.txt" run check); rc=$?
+expect_exit "check: Docker Desktop on a slot port exits 0" $rc 0
+expect_not "check: truncated com.docke is a container" "$out" '10010 (slot 01, alpha) is held by'
+expect_not "check: full com.docker.backend is a container" "$out" '10011 (slot 01, alpha) is held by'
+cat > "$W/lsof-studio.txt" <<'EOF2'
+COMMAND            PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+Studio           23456 me     50u  IPv6 0x3      0t0  TCP [::1]:10010 (LISTEN)
+EOF2
+out=$(DEV_ENV_LSOF_OUTPUT="$W/lsof-studio.txt" run check); rc=$?
+expect_has "check: another process on a slot port warns" "$out" 'WARN: 10010 (slot 01, alpha) is held by Studio, not a container'
+out=$(DEV_ENV_LSOF_OUTPUT="$W/lsof-studio.txt" run check --strict); rc=$?
+expect_exit "check --strict: that warning fails the run" $rc 1
+
 echo "assign"
 cp "$LEDGER" "$W/ledger.before"
 repo fresh '{ "plugins": [ "." ] }'

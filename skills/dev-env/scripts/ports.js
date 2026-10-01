@@ -50,7 +50,9 @@ const AVOID = new Map( [
 	[ 9003, 'Xdebug: the IDE listens here' ],
 ] );
 const SKIP_DIRS = new Set( [ 'node_modules', 'vendor', '.git', 'tmp', 'build', 'dist' ] );
-const CONTAINER_LISTENER = /docker|vpnkit|orbstack|colima|lima|podman|rancher|qemu/i;
+// Docker Desktop listens as com.docker.backend, which plain lsof truncates to "com.docke" (9 chars):
+// match the stem so either spelling counts as a container.
+const CONTAINER_LISTENER = /docke|vpnkit|orbstack|colima|lima|podman|rancher|qemu/i;
 
 // ---------------------------------------------------------------------------- arguments
 
@@ -388,7 +390,12 @@ function listeners() {
 		}
 	};
 	// lsof exits 1 when nothing matches: "|| true" keeps an empty result from reading as "no lsof".
-	const lsof = run( 'command -v lsof >/dev/null && { lsof -nP -iTCP -sTCP:LISTEN || true; }' );
+	// "+c 0" prints whole command names instead of the first 9 characters. DEV_ENV_LSOF_OUTPUT
+	// (a file of lsof output) stands in for the real command in tests.
+	const fake = process.env.DEV_ENV_LSOF_OUTPUT;
+	const lsof = fake
+		? fs.readFileSync( fake, 'utf8' )
+		: run( 'command -v lsof >/dev/null && { lsof +c 0 -nP -iTCP -sTCP:LISTEN || true; }' );
 	if ( lsof !== null && lsof !== '' ) {
 		for ( const line of lsof.split( '\n' ).slice( 1 ) ) {
 			const m = line.match( /^(\S+)\s.*:(\d+) \(LISTEN\)\s*$/ );
