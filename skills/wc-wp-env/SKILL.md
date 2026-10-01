@@ -189,7 +189,8 @@ grep -rnE 'localhost:888[89]' . --include='*.ts' --include='*.js' --include='*.j
 
 Playwright の `baseURL`（`wp-e2e-playwright` スキルの既定は 8889）、CI ワークフロー、ドキュメントが
 主な対象。CI も `.wp-env.json` のポートでそのまま起動するので、Playwright の既定値を `.wp-env.json` に揃えれば
-足りる。`WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での上書きはしない（どのファイルにも残らず、台帳との照合から見えない）。
+足りる。`playwright test` を直接呼ぶなら `WP_BASE_URL` も設定ファイルで揃える（`@wordpress/e2e-test-utils-playwright` が
+`baseURL` ではなくこれを読む。dev-env の「既存リポジトリの移行」手順 3）。`WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での上書きはしない（どのファイルにも残らず、台帳との照合から見えない）。
 
 開発環境のドキュメントが既にあれば実態に合わせて更新する。無い場合に新しく作るかどうかは
 ユーザーに尋ねる（勝手にファイルを増やさない）。

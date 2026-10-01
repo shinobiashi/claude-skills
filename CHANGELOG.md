@@ -150,6 +150,11 @@
   を明記した
 
 ### Changed
+- `dev-env` / `wc-wp-env`: 4 リポジトリの移行（PR マージ後）で踏んだ点を移行手順に追記。(1) 他のマシン・クローンに残る
+  `.wp-env.override.json` が新しいポートを上書きするので、プロジェクトの環境手順に確認を書く（cart-bridge-jp PR #94）。
+  (2) `@wordpress/e2e-test-utils-playwright` は `baseURL` ではなく `WP_BASE_URL`（既定 8889）から REST のルートを引くため、
+  `playwright test` を直接呼ぶリポジトリでは設定ファイルで設定する（saai-knowledge PR #66）。(3) PR で走らない E2E は
+  マージ後に `gh workflow run` で確かめる。
 - `wc-wp-env`: ポートの割り当てを dev-env の台帳（`../dev-env/scripts/ports.js`）に切り替え、
   `scripts/find-free-ports.js` を削除。`.wp-env.json` のテンプレートのポートはプレースホルダーに。
   `WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での上書きを案内しないように（CI も `.wp-env.json` のポートで起動する）。

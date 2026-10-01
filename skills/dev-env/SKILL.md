@@ -114,6 +114,9 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
 1. `node <skill>/scripts/ports.js get "$PWD"` でポートを確認する。
 2. `.wp-env.json` のポートを書き換える。既存の書き方（ルートの `port` / `testsPort` か、`env.development` / `env.tests` か）に
    合わせる。`.wp-env.override.json` にポートがあれば消す（中身がポートだけならファイルごと消してよい。gitignore 済み）。
+   ほかのマシン・クローンにも同じ override が残っていると、そちらが優先されて旧ポートのまま起動する。プロジェクトの
+   環境手順（開発サイクルのスキルの Step 0 など）に「override が残っていれば消す」確認を書く（cart-bridge-jp PR #94 で
+   Copilot が指摘）。
 3. 旧ポートを決め打ちしている箇所を探して直す:
 
    ```bash
@@ -122,14 +125,21 @@ node <skill>/scripts/ports.js check [--strict]   # 全リポジトリの設定�
    ```
 
    主な対象は、Playwright の `baseURL` や `WP_BASE_URL` の既定値、README・CLAUDE.md・AGENTS.md・開発環境のドキュメント、
-   プロジェクト固有のスキル。CI は `.wp-env.json` のポートでそのまま起動するので、Playwright の既定値を揃えれば足りる。
+   プロジェクト固有のスキル。CI は `.wp-env.json` のポートでそのまま起動するので、Playwright の既定値（下記の
+   `WP_BASE_URL` を含む）を揃えれば足りる。
+   **Playwright は `baseURL` だけでは足りない**。`@wordpress/e2e-test-utils-playwright` は `WP_BASE_URL` を読み込み時に
+   一度だけ読み、`requestUtils.setupRest()` は `RequestUtils.setup()` に渡した `baseURL` ではなくそこから REST のルートを
+   引く（未設定なら 8889）。`wp-scripts test-playwright` で起動しているなら `.wp-env.json` の tests ポートを自動で設定する
+   ので不要だが、`playwright test` を直接呼ぶリポジトリでは、設定ファイルの先頭（そのパッケージを読み込む前）で
+   `process.env.WP_BASE_URL` を設定する（saai-knowledge PR #66 で E2E が `ECONNREFUSED ::1:8889` になった）。
    **過去の記録（レビュー記録・完了済みの計画ログ・ADR など）は書き換えない**。
 4. OAuth のコールバック URL など、外部サービスにポート入りの URL を登録しているなら、登録し直しが必要なことを
    ユーザーに伝える（自分では登録しない）。
 5. 起動中なら `npx wp-env stop` → `npx wp-env start` で新しいポートに切り替わる（`WP_HOME` / `WP_SITEURL` は
    wp-env が起動時にポートから設定する）。記事本文などに保存済みの旧ポートの URL は残る。直すなら承認を得てから
    `wp search-replace`。
-6. `check` でそのリポジトリが `ok` になることを確かめる。
+6. `check` でそのリポジトリが `ok` になることを確かめる。E2E のワークフローが PR では走らない（夜間・手動実行のみの）
+   リポジトリなら、マージ後に `gh workflow run <ワークフロー> --ref main` で一度流し、新しいポートで通ることを確かめる。
 
 ### 台帳からリポジトリを外す
 
