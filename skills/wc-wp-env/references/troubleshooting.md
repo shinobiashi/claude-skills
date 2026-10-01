@@ -63,14 +63,19 @@ exit 1 になる。開発対象が犯人なら `before_woocommerce_init` での
 ## 5. ポートの衝突
 
 wp-env の既定は 8888（development）/ 8889（tests）。ポートを指定していないリポジトリはすべてこの 2 つを
-使うので、そうしたリポジトリ同士は同時に起動できない。
+使うので、そうしたリポジトリ同士は同時に起動できない。しかも 8881〜8999 は WordPress Studio が自動で割り当てる
+範囲で、8888/8889 も Studio のサイトと重なる。
 
-- 割り当ては `scripts/find-free-ports.js`。兄弟リポジトリの `.wp-env.json`（`port` / `testsPort` /
-  `phpmyadminPort` / `mysqlPort`、`env.development` / `env.tests` 配下も）と、今 LISTEN 中のポートの両方を見る
+- 割り当ては dev-env スキルの台帳（`../dev-env/scripts/ports.js`）。1 リポジトリに 10 ポートのスロット
+  （10010〜10999）を割り当て、`check` で全リポジトリの `.wp-env.json`（override を含む）・Studio のサイト・
+  LISTEN 中のポートと照合する
 - 目視で選ばない。このスキルの作成時、7 リポジトリを見て「空いている」と判断した 8894/8895/9004 は、
-  見ていなかった 1 リポジトリが既に使っていた
-- 一時的に変えるだけなら `WP_ENV_PORT=8890 WP_ENV_TESTS_PORT=8891 npx wp-env start`（環境変数が
-  `.wp-env.json` より優先）
+  見ていなかった 1 リポジトリが既に使っていた。その後の照合でも、gitignore 済みの override や環境変数で
+  決めたポートが他リポジトリと重なっていた（2026-10-01）
+- `WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での一時的な変更はしない。どのファイルにも残らず、次の割り当てで
+  同じポートが他のリポジトリに渡る
+- 起動が `port is already allocated` で失敗しなくても衝突していることがある。Studio のサイトが IPv6 の
+  `[::1]` で同じ番号を待ち受けると、ブラウザの `localhost` が Studio 側へ繋がる（dev-env の SKILL.md 参照）
 - ポートを既定から変えたら、8888/8889 を決め打ちしている箇所（Playwright の `baseURL`、CI、
   ドキュメント）を直す。`wp-e2e-playwright` スキルの既定は `http://localhost:8889`（`WP_BASE_URL` で上書き可）
 

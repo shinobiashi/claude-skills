@@ -5,6 +5,22 @@
 ## [Unreleased]
 
 ### Added
+- `dev-env`: ローカル開発環境のポート台帳を一元管理する新スキル。wp-env を使う各リポジトリに 10 ポートの「スロット」
+  （`10000 + NN×10`。+0/+1 が development/tests の WordPress、+2/+3 が phpMyAdmin、+4〜+9 は予備。08 は 10080 が
+  ブラウザに拒否されるため欠番）を割り当て、8881〜8999 を WordPress Studio 専用として wp-env から外す。
+  - 台帳 `ports.json` に `~/Dev` の 32 リポジトリを登録（現役の cart-bridge-jp / saai-points-wallet / saai-knowledge /
+    saai-inventory を 01〜04、残りは名前順に 05〜33）。各リポジトリの `.wp-env.json` は次の起動時に順次移行する。
+  - `scripts/ports.js`: `list` / `get` / `assign`（空きスロットへ登録。台帳の空きに加え、未登録リポジトリの設定・
+    Studio のサイト・LISTEN 中のプロセスが使うスロットも飛ばす。インストール済みコピーへの書込みは拒否）/
+    `check`（全リポジトリの `.wp-env.json` と `.wp-env.override.json` を wp-env と同じ優先順位で解釈し、
+    `ok` / `pending` / `ERROR` / `missing` を判定。Studio の `~/.studio/cli.json` と `lsof` も照合）。
+    シナリオテスト `scripts/test-ports.sh`（59 件）。
+  - 背景（2026-10-01 の調査）: Studio が 16 サイトで 8881〜8896 を使い、wp-env の 8888〜8896 とほぼ全部重なっていた。
+    25 リポジトリがポート未指定（8888/8889）、gitignore 済みの override や環境変数で決めたポートは
+    `find-free-ports.js` から見えず、cart-bridge-jp（8895）と saai-ten4wc（testsPort 8895）が重複。
+    jp4wc-pro / payjp-for-wc の phpMyAdmin が Xdebug の 9003 を、saai-blocks-for-wc は development と tests で
+    同じ 9001 を使っていた（起動が失敗する設定）。Studio のサイトが IPv6 の `[::1]` で待ち受けると、
+    wp-env は起動に成功したままブラウザの `localhost` が Studio 側へ繋がる（cart-bridge-jp R3-0j）。
 - `review-loop`: `mutate-check.sh --allow-dirty`。未コミットの変更があるファイルでも変異検証できる（「前提」章で commit が
   許可されていない R2 や、dev-cycle の確認ゲート前の修正）。
   - 復元の検証は、実行前の控えとの 1 バイト単位の比較（`cmp`）だけになり、未コミットの変更はそのまま残る。
@@ -130,6 +146,10 @@
   を明記した
 
 ### Changed
+- `wc-wp-env`: ポートの割り当てを dev-env の台帳（`../dev-env/scripts/ports.js`）に切り替え、
+  `scripts/find-free-ports.js` を削除。`.wp-env.json` のテンプレートのポートはプレースホルダーに。
+  `WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での上書きを案内しないように（CI も `.wp-env.json` のポートで起動する）。
+  `references/troubleshooting.md` §5 を Studio との衝突（IPv6 で黙って繋がる件を含む）に合わせて更新。
 - `post-merge`: 手順 6 の `/rename`・`/export` の提案に補足を追加。(1) どちらもユーザー個人の参照用で
   あり、手順 4 のリポジトリへの知見蒸留とは目的が違うこと、`/export` の生ログはローカル環境の情報
   （鍵ファイル名・パス等）を含みうるためリポジトリへ自動保存しないこと、(2) `/rename` はスキルから

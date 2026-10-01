@@ -24,7 +24,7 @@ compatibility: "@wordpress/env 11.15.0 / WordPress 7.1 / WooCommerce 11.1 / PHP 
 
 | ファイル | 役割 |
 |---|---|
-| `<skill>/scripts/find-free-ports.js` | 兄弟リポジトリの `.wp-env.json` と LISTEN 中のポートを調べ、衝突しない組を返す |
+| `<skill>/../dev-env/scripts/ports.js` | dev-env スキルのポート台帳。リポジトリのスロット（10 ポート）を返す・登録する |
 | `<skill>/scripts/verify-env.sh` | 構築結果の検証（完了条件） |
 | `<skill>/templates/wp-env-setup.sh` | 店舗の初期構築スクリプト（冪等）。リポジトリの `bin/` にコピーして使う |
 | `<skill>/references/plugins.md` | 同梱プラグインの URL・並び順・採否の基準 |
@@ -62,18 +62,19 @@ node -v && npm -v                            # @wordpress/env 11.x は node >=18
 
 ### 3. 構成を決めて提示する
 
-**ポート** — 目視で選ばず、必ずスクリプトで決める:
+**ポート** — 目視で選ばず、dev-env スキルの台帳で決める（設計と運用の詳細は dev-env の SKILL.md）:
 
 ```bash
-node <skill>/scripts/find-free-ports.js --repo "$PWD"          # 既定では親ディレクトリ配下を走査
-node <skill>/scripts/find-free-ports.js --repo "$PWD" --root ~/Dev --root ~/Sites   # 開発用ディレクトリが複数あるとき
+node <skill>/../dev-env/scripts/ports.js get "$PWD"      # 登録済みなら、そのスロットのポート（未登録は exit 4）
+node <skill>/../dev-env/scripts/ports.js assign "$PWD"   # 未登録なら、空いているスロットに登録する
+node <skill>/../dev-env/scripts/ports.js check           # 既存のリポジトリなら、状態（ok / pending / ERROR）を確かめる
 ```
 
-- stdout が割り当て（JSON）、stderr が「どのポートを誰が持っているか」の表。表はユーザーにも見せる。
-- このリポジトリが既に持っているポートは変えない（`kept`）。URL がブックマークやテスト設定に入っているため。
-- **exit 3** = 既存のポートが他リポジトリと重複している。勝手に付け替えず、表を示して
-  「付け替える / そのまま（同時起動しない前提）」をユーザーに確認する。
-- 8888/8889 は割り当てない（ポート未指定のリポジトリが暗黙に使うため）。
+- 1 リポジトリに 10 ポートのスロット（10010〜10999）を割り当てる。8881〜8999 は WordPress Studio が使うので、
+  wp-env の既定の 8888/8889 も使わない。
+- `assign` は元本（`~/Dev/claude-skills`）の台帳に 1 行追記する。その差分も手順 8 で報告する（コミットしない）。
+- 既存の `.wp-env.json` が旧ポートのまま（`check` で `pending`）なら、移行するかをユーザーに確認する
+  （手順は dev-env の「既存リポジトリの移行」）。URL がブックマークや OAuth のコールバック登録に入っていることがあるため、黙って変えない。
 
 **プラグイン** — `references/plugins.md` に従う。並び順は
 「WooCommerce → 依存先 → `"."` → 開発補助」。contextual なもの（Japanized for WooCommerce など）は、
@@ -87,7 +88,7 @@ node <skill>/scripts/find-free-ports.js --repo "$PWD" --root ~/Dev --root ~/Site
 
 ### 4. ファイルを生成する
 
-**`.wp-env.json`**（ポートは手順 3 の値。`env.tests.plugins` は WC Smooth Generator を除いたもの）:
+**`.wp-env.json`**（`<port>` などは手順 3 の `ports.js` の出力。`env.tests.plugins` は WC Smooth Generator を除いたもの）:
 
 ```json
 {
@@ -109,16 +110,16 @@ node <skill>/scripts/find-free-ports.js --repo "$PWD" --root ~/Dev --root ~/Site
 		"SCRIPT_DEBUG": true,
 		"WP_ENVIRONMENT_TYPE": "local"
 	},
-	"port": 8896,
-	"testsPort": 8897,
-	"phpmyadminPort": 9006,
+	"port": <port>,
+	"testsPort": <testsPort>,
+	"phpmyadminPort": <phpmyadminPort>,
 	"lifecycleScripts": {
 		"afterStart": "bash bin/wp-env-setup.sh"
 	},
 	"env": {
 		"tests": {
 			"plugins": [ "…WC Smooth Generator 以外を同じ順で…" ],
-			"phpmyadminPort": 9007
+			"phpmyadminPort": <testsPhpmyadminPort>
 		}
 	}
 }
@@ -187,8 +188,8 @@ grep -rnE 'localhost:888[89]' . --include='*.ts' --include='*.js' --include='*.j
 ```
 
 Playwright の `baseURL`（`wp-e2e-playwright` スキルの既定は 8889）、CI ワークフロー、ドキュメントが
-主な対象。CI はクリーンな環境で 1 つしか起動しないため、`WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での
-上書きも選択肢になる。
+主な対象。CI も `.wp-env.json` のポートでそのまま起動するので、Playwright の既定値を `.wp-env.json` に揃えれば
+足りる。`WP_ENV_PORT` / `WP_ENV_TESTS_PORT` での上書きはしない（どのファイルにも残らず、台帳との照合から見えない）。
 
 開発環境のドキュメントが既にあれば実態に合わせて更新する。無い場合に新しく作るかどうかは
 ユーザーに尋ねる（勝手にファイルを増やさない）。
@@ -203,7 +204,7 @@ Playwright の `baseURL`（`wp-e2e-playwright` スキルの既定は 8889）、C
 | tests | http://localhost:<testsPort> | http://localhost:<tests phpmyadminPort> |
 
 - ログイン: 管理者 `admin` / `password`、テスト顧客 `customer@example.com` / `password`、DB `root` / `password`
-- ポートの根拠: <find-free-ports の表の要約。避けたポートと理由>
+- ポート: dev-env 台帳のスロット <NN>（新しく登録したなら claude-skills の `ports.json` の未コミット差分も示す）
 - 同梱プラグイン: <一覧。contextual で足した／見送ったものと理由>
 - 検証: <verify-env.sh の INFO / WARN 行と RESULT>
 - 未コミットの変更: <git status --short>
