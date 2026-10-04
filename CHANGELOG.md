@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- `wp-playground`: `references/cli.md` の Failure modes に、日本語など英語以外のサイトで REST リクエストが本文 `Internal Server Error` だけの 500 になる件を追加。`WP_DEBUG` 有効時にコアが REST の応答へ付ける
+  `X-WP-DeprecatedFunction` / `X-WP-DeprecatedParam` / `X-WP-DoingItWrong` の値が `__()` で翻訳されて非 ASCII になり、
+  Node の HTTP サーバーが `ERR_INVALID_CHAR` で拒否する（PHP の error log には何も出ず、CLI の標準出力にだけ出る）。
+  テスト用 mu-plugin で `rest_api_init`（優先度 999）に `rest_handle_*` を外す回避策を載せた。
+  背景: okatora-shop PR #2 の検証で、PDF Invoices の `wcpdf_get_invoice()`（非推奨）を REST から呼んだら 500 になった。
 - `dev-env`: `ports.js ps [--all]`。Docker Desktop がコンテナをまとめて表示するグループ名（wp-env のインスタンス名 =
   `~/.wp-env/` の下のディレクトリ名。旧形式の MD5、または @wordpress/env 11 系の `wp-env-<dir>-<hash8>`）から、
   リポジトリ・スロット・公開ポートを引く。両方の名前を設定ファイルのパスから計算して照合し、合わなければ

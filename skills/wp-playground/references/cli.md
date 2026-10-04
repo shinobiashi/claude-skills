@@ -116,4 +116,13 @@ npx @wp-playground/cli@latest build-snapshot \
 - **Blueprint cannot read local assets**: add `--blueprint-may-read-adjacent-files` for local directory bundles.
 - **Port already used**: pass `--port=<free-port>`.
 - **Need a fresh persisted `start` site**: rerun with `start --reset`.
+- **REST request returns a bare `500 Internal Server Error` on a non-English site (e.g. `ja`)**: the PHP error log is clean, but the CLI's own stdout shows `TypeError [ERR_INVALID_CHAR]: Invalid character in header content ["x-wp-deprecatedfunction"]`. With `WP_DEBUG` on, core adds `X-WP-DeprecatedFunction` / `X-WP-DeprecatedParam` / `X-WP-DoingItWrong` headers to REST responses whose messages go through `__()`, and Node's HTTP server rejects the non-ASCII (translated) header value. The PHP side is fine and PHP-FPM servers are unaffected, so do not "fix" the code under test. Check the server log rather than the PHP log, avoid the deprecated call in test code, or drop those headers from a test-only mu-plugin:
+
+  ```php
+  add_action( 'rest_api_init', function () {
+  	remove_action( 'deprecated_function_run', 'rest_handle_deprecated_function', 10 );
+  	remove_action( 'deprecated_argument_run', 'rest_handle_deprecated_argument', 10 );
+  	remove_action( 'doing_it_wrong_run', 'rest_handle_doing_it_wrong', 10 );
+  }, 999 ); // After rest_api_default_filters (priority 10) registers them.
+  ```
 - **Need breakpoints or runtime logs**: return to the `wp-playground` routing procedure and select the debugging workflow.
