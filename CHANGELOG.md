@@ -5,6 +5,16 @@
 ## [Unreleased]
 
 ### Added
+- `wc-block-development`: `references/checkout-payment-method-totals.md` を追加（1.0.0 → 1.1.0）。支払い方法に依存する
+  手数料・割引を Checkout Block で扱うときの手引き。WooCommerce 9.8 以降はブロック自身が支払い方法の変更を約 1.5 秒後に
+  `PUT /wc/store/v1/checkout?__experimental_calc_totals=true` で送り、`chosen_payment_method` を保存して再計算した
+  カートを返す。独自のセッションキーを `extensionCartUpdate` で更新する旧来の方式は、合計の再計算に 1.2 秒以上かかる
+  サーバーでこのリクエストと競合する（互いに保存前の値で計算し、セッションは 1 行まとめて上書きされる）。推奨パターン
+  （`chosen_payment_method` を読む、注文確定 POST はリクエストの `payment_method` を `rest_request_before_callbacks` で
+  先に捕まえる）、版ごとの挙動（9.8 / 10.9 / 11.1.2 のタグで確認）、遅いサーバーの再現方法、Playwright での確かめ方を載せた。
+  SKILL.md の用途・参照先・Failure modes にも反映。
+  背景: jp4wc-pro #6 の調査で、Checkout Block の代引き手数料が支払い方法の切替に追従しない原因が無料版の独自キー
+  `jp4wc_gateway_id` だと分かった（Japanized-for-WooCommerce #215）。
 - `wp-playground`: `references/cli.md` の Failure modes に、日本語など英語以外のサイトで REST リクエストが本文 `Internal Server Error` だけの 500 になる件を追加。`WP_DEBUG` 有効時にコアが REST の応答へ付ける
   `X-WP-DeprecatedFunction` / `X-WP-DeprecatedParam` / `X-WP-DoingItWrong` の値が `__()` で翻訳されて非 ASCII になり、
   Node の HTTP サーバーが `ERR_INVALID_CHAR` で拒否する（PHP の error log には何も出ず、CLI の標準出力にだけ出る）。
@@ -172,6 +182,9 @@
   を明記した
 
 ### Changed
+- `wc-block-development` / `wc-development`: 確認済みバージョンを WooCommerce 11.1.2（2026-09-22）・WordPress 7.1.2 に
+  更新（確認日 2026-10-06。11.2.0 は RC）。`wc-development` の `references/blocks-integration.md` に「支払い方法に依存する
+  合計」の節を追加し、`extensionCartUpdate` で独自の支払い方法キーを持たないよう注意書きを入れた。
 - `wc-wp-env`: `@wordpress/scripts` と `@wordpress/env` 11.x の peer 衝突を手順とハマりどころに追記（troubleshooting §10）。
   `@wordpress/scripts` 30.x は `@wordpress/env ^10` を optional peer に持ち、`^11` を足すと `npm install` は通るのに
   `npm ci` だけが ERESOLVE で落ちる（jp4wc-pro PR #5 の CI で発覚）。手順 4 は `@wordpress/env@^11` と版を明示して

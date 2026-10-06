@@ -1,8 +1,8 @@
 ---
 name: wc-block-development
-version: "1.0.0"
+version: "1.1.0"
 description: "Use when developing WooCommerce-specific Gutenberg blocks: frontend blocks using WC data stores, checkout/cart block extensions (registerCheckoutFilters, Slot/Fill, IntegrationInterface), and Store API schema extensions (ExtendSchema). NOTE: WooCommerce Product Editor blocks (@woocommerce/product-editor) are retired — deprecated in WC 10.9, removed from core in WC 11.0 (2026-07-28); do not build new work on them. Complements wp-block-development which covers general block fundamentals."
-compatibility: "Targets WooCommerce 9.0+, WordPress 6.6+ (current stable: WC 11.1.0, WP 7.1; verified 2026-09-09), @woocommerce/dependency-extraction-webpack-plugin 3.x+ (latest 5.1.0). Requires Composer and Node.js."
+compatibility: "Targets WooCommerce 9.0+, WordPress 6.6+ (current stable: WC 11.1.2, WP 7.1.2; WC 11.2.0 is at RC; verified 2026-10-06), @woocommerce/dependency-extraction-webpack-plugin 3.x+ (latest 5.1.0). Requires Composer and Node.js."
 ---
 
 # WooCommerce Block Development
@@ -14,6 +14,7 @@ Use this skill when:
 - Building a custom block that reads WC product/cart/order data on the frontend
 - Adding a custom field, section, or UI to the WooCommerce Cart or Checkout blocks
 - Extending the WooCommerce Store API to pass custom data to blocks
+- Making Checkout totals depend on the selected payment method (gateway fee, surcharge, discount)
 - Maintaining **existing** WooCommerce Product Editor blocks (retired: deprecated WC 10.9, removed core WC 11.0 — do not start new work here)
 - Setting up `@woocommerce/dependency-extraction-webpack-plugin` in webpack.config.js
 - Debugging why a WC block integration script is not loading
@@ -58,6 +59,9 @@ If extending the WooCommerce Checkout or Cart blocks:
 Key references:
 - `references/block-types-and-decisions.md` (checkout extension overview)
 - `references/wc-data-stores.md` (passing PHP data via IntegrationInterface)
+- `references/checkout-extensions.md` (IntegrationInterface, `registerCheckoutFilters`, Slot/Fill)
+
+If a fee, surcharge or discount depends on **which payment method is selected**, read `references/checkout-payment-method-totals.md` first. Since WC 9.8 the Checkout block pushes the selection to the server itself and stores it in `chosen_payment_method`; extensions that keep their own "selected gateway" session key race with that request.
 
 ### 2C) Product Editor block
 
@@ -95,6 +99,9 @@ For **checkout extensions**: use the `IntegrationInterface` pattern registered v
 - `registerCheckoutFilters` has no effect: filter registered after store is initialized; move registration to the top level of the viewScript, not inside a React component
 - Slot Fill component renders nothing: Slot name misspelled or WooCommerce version does not support it; check WC version requirements
 - Product Editor block not appearing: block template not registered for correct product type; verify `woocommerce_rest_product_object_type` and template area
+- A payment-method fee stays after switching away from the method, or appears and then disappears: the fee is calculated from a session key of the extension's own instead of `chosen_payment_method`, and two overlapping requests overwrite each other; only shows on slow servers. See `references/checkout-payment-method-totals.md`
+- An order is placed with a fee for a different payment method than the one submitted: the place-order POST calculates totals before it applies the request's `payment_method`; capture the request's value in `rest_request_before_callbacks`
+- E2E test clicks a payment method and the selection is undone: the Checkout block settles on its initial method shortly after the radios render (WC 10.9+ restores the session's method); wait for a `:checked` radio before clicking
 
 ## Escalation
 

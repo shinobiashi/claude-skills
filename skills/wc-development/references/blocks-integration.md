@@ -179,6 +179,29 @@ extensionCartUpdate( {
 } );
 ```
 
+Do not use this to keep "the selected payment method" in a session key of your own — see the next section.
+
+## Totals That Depend on the Payment Method
+
+For a gateway fee, surcharge or discount in block checkout:
+
+- Since WC 9.8 the Checkout block pushes a payment method change itself: about 1.5 s after the
+  change it sends `PUT /wc/store/v1/checkout?__experimental_calc_totals=true`, the server stores
+  the method in `chosen_payment_method`, recalculates and returns the cart.
+- Add the fee in `woocommerce_cart_calculate_fees` and decide from
+  `WC()->session->get( 'chosen_payment_method' )` — the same key the classic checkout uses.
+- The place-order `POST` calculates totals **before** it applies the request's `payment_method`.
+  Capture the request's value in `rest_request_before_callbacks` and prefer it over the session,
+  resetting it on every request.
+- A session key of your own, updated through `extensionCartUpdate`, races with the block's request
+  on slow servers: each calculates from the other's unsaved value, and the session (one database
+  row) is overwritten by whichever request finishes last. If you send the selection through
+  `extensionCartUpdate` for an immediate update, write `chosen_payment_method` itself, after
+  validating the value against the available gateways (the endpoint is unauthenticated).
+
+Full pattern, version table, reproduction and testing notes: `wc-block-development` skill,
+`references/checkout-payment-method-totals.md`.
+
 ## Checkout Block Integration (non-payment)
 
 Register a block integration for scripts/styles:

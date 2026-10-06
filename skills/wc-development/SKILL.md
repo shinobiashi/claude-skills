@@ -8,8 +8,8 @@ description: >
   "checkout block", "Store API", "WC_Payment_Gateway", "shipping method", "product type",
   "WooCommerce REST API", or any WooCommerce-specific development task. Also trigger when the user
   references WooCommerce hooks, filters, or classes. This skill targets WooCommerce 9.0–11.1+
-  (current stable: 11.1.0, released 2026-09-03; 11.0 released 2026-07-28) on WordPress 6.9–7.1+
-  (current stable: 7.1).
+  (current stable: 11.1.2, released 2026-09-22; 11.1.0 released 2026-09-03; 11.0 released 2026-07-28)
+  on WordPress 6.9–7.1+ (current stable: 7.1.2).
 compatibility: >
   WooCommerce 9.0–11.1+ on WordPress 6.9–7.1+ (WC 10.8+ requires WP 6.9). PHP 8.3 recommended for new
   extensions (WC core minimum is 7.4). HPOS required for all new extensions.
@@ -181,6 +181,7 @@ See: `references/security.md`
 | Gateway not in settings | `woocommerce_payment_gateways` filter not registered |
 | HPOS warning on status page | Missing `FeaturesUtil::declare_compatibility()` |
 | Block checkout missing payment fields | Missing Blocks integration class or JS |
+| Payment-method fee wrong or flickering in block checkout | Fee read from a session key of its own instead of `chosen_payment_method` — see `references/blocks-integration.md` |
 | Order meta not saving | Using `update_post_meta()` instead of `$order->update_meta_data()` + `$order->save()` |
 | Admin styling broken on WP 7.0+ | CSS not scoped; relying on deprecated WP admin styles |
 
@@ -193,7 +194,7 @@ See: `references/debugging.md`
 - [HPOS Documentation](https://developer.woocommerce.com/docs/hpos/)
 - [Blocks Payment Methods](https://github.com/woocommerce/woocommerce/tree/trunk/plugins/woocommerce-blocks/docs/third-party-developers/extensibility/checkout-payment-methods/)
 - [WooCommerce Developer Blog](https://developer.woocommerce.com/)
-- Version claims in this skill were last verified 2026-09-09 (WC 11.1.0, WP 7.1). Check
+- Version claims in this skill were last verified 2026-10-06 (WC 11.1.2, WP 7.1.2; WC 11.2.0 at RC). Check
   [Releases](https://developer.woocommerce.com/releases/) for anything newer before citing versions.
 
 ## Related skills
