@@ -104,6 +104,13 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `dev-env`: `verify-ports.sh` が @wordpress/env 11.16.0 の環境で必ず「no running WordPress container … (instance '?')」で
+  FAIL していた。11.16.0 には `wp-env install-path` が無く（何も出力せず exit 0）、インスタンス名を引けなかったため。
+  `install-path` が空なら `wp-env status --json` の `installPath` から引く。シナリオテストを 40 → 47 件に（status からの解決、
+  どちらも空、JSON でない出力）。jp4wc-pro の wp-env 再構築（PR #5）で発見し、実機の 11.16.0 で FAIL 無しを確認。
+- `dev-env`: `test-ports.sh` の assign のシナリオが、実機で待ち受け中のポートに左右されていた（スロット 11 の wp-env を
+  起動していると「10110 is used by squatter」ではなく「listening now (com.docker.backend)」になり 1 件失敗する）。
+  assign の 3 回の実行に空の `DEV_ENV_LSOF_OUTPUT` を渡して、実機の状態から切り離した。
 - `dev-env`: `ports.js check` が Docker Desktop の待ち受け（`com.docker.backend`）を「コンテナ以外のプロセス」と誤って
   WARN にしていた。`lsof` は既定でコマンド名を 9 文字（`com.docke`）に切り詰めるため、`docker` の一致判定に掛からなかった。
   `lsof +c 0` で全体を取り、判定も `docke` で行う。4 リポジトリを同時に起動した実機の照合で発見。
@@ -165,6 +172,11 @@
   を明記した
 
 ### Changed
+- `wc-wp-env`: `@wordpress/scripts` と `@wordpress/env` 11.x の peer 衝突を手順とハマりどころに追記（troubleshooting §10）。
+  `@wordpress/scripts` 30.x は `@wordpress/env ^10` を optional peer に持ち、`^11` を足すと `npm install` は通るのに
+  `npm ci` だけが ERESOLVE で落ちる（jp4wc-pro PR #5 の CI で発覚）。手順 4 は `@wordpress/env@^11` と版を明示して
+  `npm ci --dry-run` を通し、手順 6 の検証にも加えた。回避は `package.json` の `overrides`。§9 に、11.16.0 では
+  `wp-env install-path` が無いことと、`@php-wasm/*` の EBADENGINE 警告（Node 20）を追記。
 - `dev-env` / `wc-wp-env`: 4 リポジトリの移行（PR マージ後）で踏んだ点を移行手順に追記。(1) 他のマシン・クローンに残る
   `.wp-env.override.json` が新しいポートを上書きするので、プロジェクトの環境手順に確認を書く（cart-bridge-jp PR #94）。
   (2) `@wordpress/e2e-test-utils-playwright` は `baseURL` ではなく `WP_BASE_URL`（既定 8889）から REST のルートを引くため、

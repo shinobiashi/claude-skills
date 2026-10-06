@@ -1,7 +1,7 @@
 ---
 name: dev-env
 description: ローカル開発環境のポート台帳を一元管理するスキル。wp-env を使う各リポジトリに 10 ポートずつの「スロット」を割り当て、WordPress Studio（8881〜）や macOS・Xdebug などと衝突しないようにする。台帳（ports.json）と照合スクリプト（ports.js）を同梱。「ポートを割り当てて」「ポートが衝突する」「port is already allocated」「wp-env が起動しない」「Studio とぶつかる」「localhost で別のサイトが出る」「Docker Desktop のコンテナがどのリポジトリかわからない」「wp-env のポートを移行して」「ポート台帳」「開発環境のポート」などと言われたら使う。wp-env を新しく構築するときは wc-wp-env の手順 3 からこのスキルのスクリプトを使う。
-compatibility: "@wordpress/env 10.39 / 11.15、WordPress Studio 1.22.0、macOS で確認（2026-10-01）。wp-env の設定の解釈は node_modules/@wordpress/env/lib/config/ を正とする。"
+compatibility: "@wordpress/env 10.39 / 11.15、WordPress Studio 1.22.0、macOS で確認（2026-10-01）。verify-ports.sh は @wordpress/env 11.16.0 でも確認（2026-10-06）。wp-env の設定の解釈は node_modules/@wordpress/env/lib/config/ を正とする。"
 ---
 
 # /dev-env — ローカル開発環境のポート台帳

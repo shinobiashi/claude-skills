@@ -192,21 +192,25 @@ expect_exit "ps: docker unreachable still exits 0" $rc 0
 expect_has "ps: docker unreachable is reported" "$out" "WARN: docker is not reachable"
 
 echo "assign"
+# assign also skips a slot whose ports have a live listener. Give it an empty listing: otherwise a
+# wp-env running on this machine in slot 10 or 11 changes which slot is taken, and the reason shown.
+printf 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n' > "$W/lsof-none.txt"
+assign_run() { DEV_ENV_LSOF_OUTPUT="$W/lsof-none.txt" run assign "$@"; }
 cp "$LEDGER" "$W/ledger.before"
 repo fresh '{ "plugins": [ "." ] }'
-out=$(run assign fresh); rc=$?
+out=$(assign_run fresh); rc=$?
 expect_exit "assign: exits 0" $rc 0
 expect_has "assign: skips the blocked slot 08 and takes 10" "$out" '"repo":"fresh","slot":10,"port":10100'
 expect_has "assign: ledger gains one line" "$(diff "$W/ledger.before" "$LEDGER")" '> 		{ "slot": 10, "repo": "fresh" }'
 expect_has "assign: line count +1" "$(wc -l < "$LEDGER" | tr -d ' ')" "$(( $(wc -l < "$W/ledger.before") + 1 ))"
 cp "$LEDGER" "$W/ledger.after"
-out=$(run assign fresh); rc=$?
+out=$(assign_run fresh); rc=$?
 expect_exit "assign: re-run exits 0" $rc 0
 if cmp -s "$LEDGER" "$W/ledger.after"; then ok "assign: re-run leaves the ledger untouched"; else bad "assign: re-run changed the ledger"; fi
 
 repo squatter '{ "port": 10110, "testsPort": 10111 }'
 repo late '{ "plugins": [ "." ] }'
-out=$(run assign late); rc=$?
+out=$(assign_run late); rc=$?
 expect_has "assign: skips a slot an unregistered config sits on" "$out" 'skipped slot 11: 10110 is used by squatter'
 expect_has "assign: takes the next slot" "$out" '"repo":"late","slot":12'
 rm -rf "$ROOT/squatter"

@@ -142,9 +142,14 @@ development には HPOS 有効化・店舗設定（日本/JPY/小数 0 桁・パ
 **`package.json`** — 既存の内容を残して追記する。無ければ `"private": true` の最小構成で作る:
 
 ```bash
-npm install --save-dev @wordpress/env
+npm install --save-dev @wordpress/env@^11
 npm pkg set scripts.env:start="wp-env start" scripts.env:stop="wp-env stop" scripts.env:cleanup="wp-env cleanup"
+npm ci --dry-run   # CI が使う解決。ERESOLVE なら references/troubleshooting.md §10
 ```
+
+版は `@^11` と明示する。`@wordpress/scripts` が入っているリポジトリでは、版を指定しないと 10.x が入る
+（`@wordpress/scripts` 30.x が `@wordpress/env ^10` を optional peer に持つため）。`^11` にすると `npm install` は
+通るのに `npm ci` だけが ERESOLVE で失敗するので、その場で `npm ci --dry-run` を通す（§10）。
 
 `env:destroy` は足さない（共有 Docker イメージまで消しにいくため。既にあれば消さずに残す）。
 
@@ -178,6 +183,8 @@ bash <skill>/scripts/verify-env.sh --dev-only
   なること。
 - ポートも確かめる: `bash <skill>/../dev-env/scripts/verify-ports.sh`。台帳のスロットで応答しているか、
   `localhost` が Studio などの別サイトに繋がっていないかを見る（verify-env.sh は HTTP 200 しか見ない）。
+- `package.json` / `package-lock.json` を変えたら `npm ci --dry-run` も通す。CI は `npm ci` で入れるので、ローカルの
+  `npm install` が通っていても peer の衝突で落ちることがある（`references/troubleshooting.md` §10）。
 
 ### 7. 周辺との整合を取る
 

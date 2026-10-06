@@ -80,8 +80,20 @@ read -r SLOT PORT TESTS_PORT PMA TESTS_PMA < <(node -e '
 ' "$LEDGER_JSON")
 info "ledger: slot $SLOT → dev $PORT / tests $TESTS_PORT / phpMyAdmin $PMA, $TESTS_PMA"
 
-# ---- the containers of this repository's instance (~/.wp-env/<hash>)
-HASH="$(basename "$(npx_ wp-env install-path </dev/null 2>/dev/null | tail -1)")"
+# ---- the containers of this repository's instance (~/.wp-env/<instance>)
+# @wordpress/env 11.16.0 has no `install-path` command (it prints nothing and exits 0); there the
+# path comes from `wp-env status --json`.
+INSTALL_PATH="$(npx_ wp-env install-path </dev/null 2>/dev/null | tail -1)"
+if [ -z "$INSTALL_PATH" ]; then
+	INSTALL_PATH="$(npx_ wp-env status --json </dev/null 2>/dev/null | node -e '
+		let out = "";
+		process.stdin.on("data", (d) => (out += d)).on("end", () => {
+			const line = out.split("\n").reverse().find((l) => l.trim().startsWith("{"));
+			try { console.log(JSON.parse(line).installPath || ""); } catch (e) {}
+		});
+	')"
+fi
+HASH="$(basename "$INSTALL_PATH")"
 published() { # service -> the host port published for the container's port 80, or nothing
 	docker_ ps --filter "name=^${HASH}-$1-1\$" --format '{{.Ports}}' 2>/dev/null |
 		sed -nE 's/^[^>]*:([0-9]+)->80\/tcp.*/\1/p' | head -1

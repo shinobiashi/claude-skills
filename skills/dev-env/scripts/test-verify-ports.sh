@@ -31,9 +31,11 @@ EOF
 # ---- stubs: each reads its answers from files under $STUB
 cat > "$STUB/docker" <<'EOF'
 #!/usr/bin/env bash
-# docker ps --filter name=^<hash>-<service>-1$ --format ...
+# docker ps --filter name=^<instance>-<service>-1$ --format ...
+# Containers exist only for the instance named in $STUB_DIR/instance (default: stubhash).
+inst="$(cat "$STUB_DIR/instance" 2>/dev/null || echo stubhash)"
 for a in "$@"; do
-	case "$a" in name=*) svc="${a#name=^stubhash-}"; svc="${svc%-1\$}" ;; esac
+	case "$a" in name=*) svc="${a#name=^${inst}-}"; svc="${svc%-1\$}" ;; esac
 done
 [ -f "$STUB_DIR/ports/$svc" ] && cat "$STUB_DIR/ports/$svc"
 exit 0
@@ -54,16 +56,22 @@ esac
 EOF
 cat > "$STUB/npx" <<'EOF'
 #!/usr/bin/env bash
-# npx wp-env install-path | npx wp-env run <cli|tests-cli> wp option get siteurl
+# npx wp-env install-path | npx wp-env status --json | npx wp-env run <cli|tests-cli> wp option get siteurl
+# $STUB_DIR/install-path and $STUB_DIR/status hold what those two commands print. A missing file
+# means no output, which is how @wordpress/env 11.16 answers install-path.
 case "$2" in
-	install-path) echo "/home/me/.wp-env/stubhash" ;;
+	install-path) [ -f "$STUB_DIR/install-path" ] && cat "$STUB_DIR/install-path" ;;
+	status) [ -f "$STUB_DIR/status" ] && cat "$STUB_DIR/status" ;;
 	run) f="$STUB_DIR/siteurl-$3"; [ -f "$f" ] && { echo "ℹ Starting 'wp option get siteurl' on the $3 container."; cat "$f"; } ;;
 esac
+exit 0
 EOF
 chmod +x "$STUB/docker" "$STUB/curl" "$STUB/npx"
 
 # ---- a healthy instance on slot 01 (10010-10013); scenarios change one thing at a time
 healthy() {
+	echo "/home/me/.wp-env/stubhash" > "$STUB/install-path"
+	rm -f "$STUB/status" "$STUB/instance"
 	printf '0.0.0.0:10010->80/tcp, [::]:10010->80/tcp\n' > "$STUB/ports/wordpress"
 	printf '0.0.0.0:10011->80/tcp, [::]:10011->80/tcp\n' > "$STUB/ports/tests-wordpress"
 	printf '0.0.0.0:10012->80/tcp, [::]:10012->80/tcp\n' > "$STUB/ports/phpmyadmin"
@@ -151,6 +159,25 @@ expect_not "stops before the HTTP checks" "wp-login via"
 run stranger
 expect_exit "repository not in the ledger → exit 1" $RC 1
 expect_has "points at assign" "FAIL  ledger: stranger is not in the ledger"
+
+echo "instance lookup"
+# @wordpress/env 11.16: install-path prints nothing, status --json carries the path, and the
+# instance is named wp-env-<directory>-<hash8>.
+healthy; rm "$STUB/install-path"
+echo "wp-env-alpha-1a2b3c4d" > "$STUB/instance"
+printf '%s\n' '{"status":"running","runtime":"docker","installPath":"/home/me/.wp-env/wp-env-alpha-1a2b3c4d"}' > "$STUB/status"
+run
+expect_exit "status --json names the instance when install-path is silent → exit 0" $RC 0
+expect_has "uses the instance from status --json" "INFO  instance: wp-env-alpha-1a2b3c4d"
+expect_has "finds that instance's containers" "PASS  development container publishes 10010"
+
+healthy; rm "$STUB/install-path"; run
+expect_exit "neither command names the instance → exit 1" $RC 1
+expect_has "reports the unknown instance" "instance '?'"
+
+healthy; rm "$STUB/install-path"; echo "not json" > "$STUB/status"; run
+expect_exit "unparseable status output → exit 1" $RC 1
+expect_has "still says how to start" "start it with: npx wp-env start"
 
 echo "warnings and options"
 healthy; sed -i.bak 's#^http://localhost:10010/wp-json/ 200#http://localhost:10010/wp-json/ 404#' "$STUB/http"; run

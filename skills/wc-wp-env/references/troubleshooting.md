@@ -1,6 +1,7 @@
 # ハマりどころ（すべて実測済み）
 
 確認環境: `@wordpress/env` 11.15.0 / WordPress 7.1.1 / WooCommerce 11.1.1 / PHP 8.3 / Docker Desktop（2026-09-19）。
+§10 と、§9 の `install-path`・EBADENGINE の項は `@wordpress/env` 11.16.0 / Node 20.19 / npm 11.5（2026-10-06）。
 wp-env の版が変わったら、ここを信じる前に `node_modules/@wordpress/env/README.md` を読む。
 
 ## 1. `wp-env start` が「プラグインを有効化できない」で失敗する
@@ -128,3 +129,37 @@ override は `.wp-env.tests.override.json`。そのとき上記 3 スキルの `
 - **Japanized for WooCommerce** の wordpress.org スラッグは `woocommerce-for-japan`
 - **WC Smooth Generator** は wordpress.org に無い。GitHub Releases の zip を指定し、tests には入れない
 - マシン固有の上書きは `.wp-env.override.json`（`.gitignore` に入れる）。共有したい設定は `.wp-env.json`
+- **`wp-env install-path` は 11.16.0 に無い**: 何も出力せず exit 0 で終わる。インスタンスのディレクトリは
+  `npx wp-env status --json` の `installPath`（`~/.wp-env/wp-env-<ディレクトリ名>-<hash8>`）
+- **`npm install` の EBADENGINE 警告**: 11.16.0 が依存する `@php-wasm/*` が node >=24.18 / npm >=11.16 を要求する。
+  Node 20 では警告だけで、Docker ランタイムの `start` と `verify-env.sh` は通る
+
+## 10. `npm ci` が ERESOLVE で失敗する（`@wordpress/scripts` と `@wordpress/env` の peer 衝突）
+
+```
+npm error code ERESOLVE
+npm error While resolving: @wordpress/scripts@30.27.0
+npm error Found: @wordpress/env@11.16.0
+npm error Could not resolve dependency:
+npm error peerOptional @wordpress/env@"^10.0.0" from @wordpress/scripts@30.27.0
+```
+
+原因: `@wordpress/scripts` 30.x（31.0.0 も同じ）は `@wordpress/env ^10.0.0` を optional peer に持つ。ルートで `^11` を
+要求すると衝突するが、**`npm install` は通り、`npm ci` だけが失敗する**。ローカルでは気づかず、CI の `npm ci`
+（lint・Jest・E2E のジョブ）で初めて落ちる（jp4wc-pro PR #5）。版を指定せずに `npm install --save-dev @wordpress/env`
+すると、npm はこの peer に合わせて 10.x を入れる。
+
+対処: `package.json` の `overrides` で、その peer をルートの版に合わせる。
+
+```json
+"overrides": {
+	"@wordpress/scripts": {
+		"@wordpress/env": "$@wordpress/env"
+	}
+}
+```
+
+`npm install` → `npm ci --dry-run` で ERESOLVE が消えることを確かめる（jp4wc-pro では `package-lock.json` は変わらず、
+`npm ci`・lint・Jest が通った）。wp-env や Playwright を `wp-scripts` 経由（`wp-scripts test-playwright` など）で呼ぶ
+リポジトリでは、overrides の前に 11.x で動くかを確かめる。`@wordpress/scripts` 36.0.0 の peer は `>=10.0.0` なので、
+そこまで上げれば overrides は要らない。
