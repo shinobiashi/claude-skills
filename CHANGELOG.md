@@ -5,6 +5,16 @@
 ## [Unreleased]
 
 ### Added
+- `ssm-provider`: 新規。Signal Mail for WooCommerce（`saai-signal-mail`）の配信プロバイダを実装・レビューする手順。
+  `ProviderInterface` の契約の写し、`SendResult` の retryable 規則、Webhook 検証と `DeliveryEvent` 正規化、`discover_settings()`
+  （ADR-0009）、必須 PHPUnit 13 項目と `pre_http_request` モックの雛形、有料アドオンの骨格、`scripts/sign-webhook.php`
+  （Svix / 生 HMAC / 無署名で fixture に署名し、`--url` で wp-env へ再生）。コアと Brevo 等のアドオン（別リポジトリ）の両方で使うため共有側に置く。
+- `wc-email-editor`: 新規。`woocommerce/email-editor`（PHP 2.18.0）と `@woocommerce/email-editor`（JS 2.5.0）を自前プラグインに
+  同梱する手順。3 フィルター（`woocommerce_email_editor_post_types` / `woocommerce_is_email_editor_page` / `replace_editor`）と
+  `Assets_Manager` → `initializeEditor()` の統合レシピ、`Renderer::render()` と差し込みタグ、webpack（`@wordpress/ui` と
+  `@wordpress/global-styles-engine` は同梱、`__i18n_text_domain__`）と Strauss（`EmailEditor\` と `EmailEditorVendor\` の両方を接頭辞化）、
+  WC 本体のブロックメールエディタが有効なときに同梱版を起動しない共存ルール。2026-10-07 に WooCommerce monorepo trunk と
+  Packagist / npm で確認。背景: saai-signal-mail ROADMAP U4（SPIKE-1 / PR-17 / PR-18）。
 - `wc-block-development`: `references/checkout-payment-method-totals.md` を追加（1.0.0 → 1.1.0）。支払い方法に依存する
   手数料・割引を Checkout Block で扱うときの手引き。WooCommerce 9.8 以降はブロック自身が支払い方法の変更を約 1.5 秒後に
   `PUT /wc/store/v1/checkout?__experimental_calc_totals=true` で送り、`chosen_payment_method` を保存して再計算した

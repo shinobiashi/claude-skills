@@ -38,6 +38,8 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`wc-block-development`](skills/wc-block-development/SKILL.md) | Use when developing WooCommerce-specific Gutenberg blocks: frontend blocks using WC data… |
 | [`wc-action-scheduler`](skills/wc-action-scheduler/SKILL.md) | Use when a WooCommerce extension needs deferred, recurring, or batch background work wit… |
 | [`wc-wp-env`](skills/wc-wp-env/SKILL.md) | WooCommerce 拡張プラグインのリポジトリに wp-env のローカル開発環境を「構築」するスキル。.wp-env.json を書くだけでなく、他リポジトリと衝突しないポートの割り当て、同梱プラグ… |
+| [`wc-email-editor`](skills/wc-email-editor/SKILL.md) | WooCommerce のブロックメールエディタ 2 パッケージ（Composer `woocommerce/email-editor`、npm `@woocommerce/email-editor`）を自前プラグインに同梱して使う手順。投稿タイプ登録・エディタ画面・レンダリング・差し込みタグ・webpack / Strauss・WC 本体との共存 |
+| [`ssm-provider`](skills/ssm-provider/SKILL.md) | Signal Mail for WooCommerce の配信プロバイダ（コア Resend / 有料アドオン Brevo・SES・Mailgun）の実装手順。契約・retryable 規則・Webhook 正規化・必須テスト・アドオン骨格・Webhook 署名スクリプト |
 | [`saai-admin-react`](skills/saai-admin-react/SKILL.md) | Use when building or extending a WordPress / WooCommerce admin page in React the SAAI wa… |
 | [`payjp-v2-woocommerce`](skills/payjp-v2-woocommerce/SKILL.md) | Use when developing WooCommerce payment gateway plugins using PAY.JP v2 API: credit card… |
 
