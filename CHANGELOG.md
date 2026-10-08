@@ -199,6 +199,11 @@
   を明記した
 
 ### Changed
+- `dev-cycle`: Step 7 の収束判定と終了条件を明記。新規指摘をすべて保留にして修正が無かったラウンドでも、新規指摘があった bot は
+  未収束なので、依頼回数が 3 未満なら再依頼する（同じ HEAD を飛ばすのは `sequential` 専用の規則）。再依頼せずに終える時は
+  AskUserQuestion で確認し、最終報告の状態に「未収束（ユーザー判断で終了）」と書く。状態の区別に「上限」（3 回目の依頼でも
+  新規指摘があった）も追加。背景: Japanized-for-WooCommerce PR #222 で修正なしの G2 の後にゲートを終えたが、ユーザーの指示で
+  依頼した G3 で Copilot が同じコードに新規 2 件（「Previously missed」）を出し、Codex はそこで初めて収束した。
 - `wc-block-development` / `wc-development`: 確認済みバージョンを WooCommerce 11.1.2（2026-09-22）・WordPress 7.1.2 に
   更新（確認日 2026-10-06。11.2.0 は RC）。`wc-development` の `references/blocks-integration.md` に「支払い方法に依存する
   合計」の節を追加し、`extensionCartUpdate` で独自の支払い方法キーを持たないよう注意書きを入れた。
