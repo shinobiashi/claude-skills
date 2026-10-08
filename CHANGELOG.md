@@ -124,6 +124,13 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `dev-cycle`: `gate-round.sh push` が、PR がマージ済み・クローズ済みのブランチにもそのまま push していた。マージの後に
+  push したコミットは base に届かず取り残される（Japanized-for-WooCommerce PR #222 で、マージの 2 分後に push した記録用
+  コミットを main へ cherry-pick し直した）。push の前に `gh pr list --head <branch> --state all` で PR を引き、PR があって
+  開いているものが 1 つも無ければ拒否する（`--allow-closed-pr` で上書き）。PR がまだ無い初回 push は通し、`gh` が答えられない
+  時は警告して続行する。あわせて `help` の表示を、行番号の決め打ちからヘッダーコメントの終わりまでに変えた。
+  シナリオテストを 32 → 46 件に（マージ済み・クローズ済みで拒否、dry-run でも拒否、同名ブランチの新しい PR が開いていれば通す、
+  `gh` の失敗で続行、`--allow-closed-pr`、help の範囲）。
 - `dev-env`: `verify-ports.sh` が @wordpress/env 11.16.0 の環境で必ず「no running WordPress container … (instance '?')」で
   FAIL していた。11.16.0 には `wp-env install-path` が無く（何も出力せず exit 0）、インスタンス名を引けなかったため。
   `install-path` が空なら `wp-env status --json` の `installPath` から引く。シナリオテストを 40 → 47 件に（status からの解決、

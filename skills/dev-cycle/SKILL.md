@@ -391,7 +391,10 @@ push は `git push` の代わりに `scripts/gate-round.sh push` で行うと、
 push が成功した時だけ `HEAD=<sha>` と `T=<時刻>` を出力する。この `T` を次の bot の `--since` と
 `gate-threads.sh list` に使う(push の後に取った `T` や前ラウンドの `T` を流用すると、指摘の取りこぼしや
 重複が起きる)。記録用 `docs:` コミットの push も同じスクリプトで行い、その `T` を次の依頼に使う。
-main / master の push は拒否する。
+main / master の push は拒否する。PR がマージ済み・クローズ済みのブランチへの push も拒否する(マージの後に
+push したコミットは base に届かない。Japanized-for-WooCommerce PR #222 では、マージの 2 分後に push した記録用
+コミットが取り残され、main へ cherry-pick し直した)。拒否されたら、未マージのコミットを別の PR か(docs だけなら)
+base への直接コミットで入れる。意図的な時だけ `--allow-closed-pr`。
 
 **7. GitHub への反映**(push 後にのみ行う):
 

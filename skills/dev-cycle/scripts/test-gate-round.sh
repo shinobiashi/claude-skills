@@ -33,6 +33,12 @@ LOG="$W/calls.log"
 cat > "$W/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1 $2" = "pr view" ]; then echo "${FAKE_PR_HEAD:-}"; exit 0; fi
+if [ "$1 $2" = "pr list" ]; then
+  # FAKE_PR_LIST holds what the --jq filter would print: "<number> <state>" lines.
+  [ -z "${FAKE_FAIL_PR_LIST:-}" ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }
+  [ -z "${FAKE_PR_LIST:-}" ] || printf '%b\n' "$FAKE_PR_LIST"
+  exit 0
+fi
 if [ "$1 $2" = "pr comment" ]; then
   echo "gh $*" >> "$FAKE_LOG"
   [ -z "${FAKE_FAIL_COMMENT:-}" ] || exit 1
@@ -84,6 +90,44 @@ git checkout -q feat/x
 run push nonexistent-branch
 [ "$RC" -ne 0 ]; check "push of a missing branch fails" $?
 echo "$OUT" | grep -q '^T=' && bad "failed push must not print T" || ok "failed push prints no T"
+
+echo "== push: the branch's PR must still be open"
+echo c > c.txt && git add c.txt && git commit -q -m "docs: c"
+NEW_SHA="$(git rev-parse HEAD)"
+remote_head() { git ls-remote --heads origin feat/x | cut -c1-40; }
+
+FAKE_PR_LIST="5 MERGED" run push
+[ "$RC" -ne 0 ]; check "push refuses when the only PR is merged" $?
+[ "$(remote_head)" = "$HEAD_SHA" ]; check "nothing was pushed for a merged PR" $?
+echo "$OUT" | grep -q '#5 MERGED'; check "the refusal names the PR and its state" $?
+echo "$OUT" | grep -q -- '--allow-closed-pr'; check "the refusal names the override" $?
+echo "$OUT" | grep -q '^T=' && bad "refused push must not print T" || ok "refused push prints no T"
+
+FAKE_PR_LIST="6 CLOSED" run push
+[ "$RC" -ne 0 ] && [ "$(remote_head)" = "$HEAD_SHA" ]; check "push refuses when the only PR is closed" $?
+
+FAKE_PR_LIST="5 MERGED" run push --dry-run
+[ "$RC" -ne 0 ]; check "push --dry-run refuses a merged PR too" $?
+
+FAKE_PR_LIST="5 MERGED\n7 OPEN" run push --dry-run
+[ "$RC" -eq 0 ]; check "an open PR for a reused branch name lets the push go" $?
+
+FAKE_FAIL_PR_LIST=1 run push --dry-run
+[ "$RC" -eq 0 ] && echo "$OUT" | grep -q "could not check whether a PR"; check "a gh failure warns and lets the push go" $?
+
+FAKE_PR_LIST="5 MERGED" run push --allow-closed-pr
+[ "$RC" -eq 0 ] && [ "$(remote_head)" = "$NEW_SHA" ]; check "--allow-closed-pr pushes anyway" $?
+HEAD_SHA="$NEW_SHA"
+
+FAKE_PR_LIST="7 OPEN" run push
+[ "$RC" -eq 0 ]; check "push goes ahead while the PR is open" $?
+
+run push --bogus
+[ "$RC" -ne 0 ] && echo "$OUT" | grep -q "unknown option for push"; check "unknown push option rejected" $?
+
+run help
+echo "$OUT" | grep -q -- '--allow-closed-pr' && echo "$OUT" | grep -q 'gate-round.sh publish'; check "help prints the whole header" $?
+echo "$OUT" | grep -q 'set -euo pipefail' && bad "help must stop at the end of the header" || ok "help stops at the end of the header"
 
 echo "== publish: validation (nothing may be posted)"
 export FAKE_PR_HEAD="$HEAD_SHA"

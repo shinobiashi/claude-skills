@@ -22,13 +22,20 @@
 #      midway it names what was already posted so the rerun can leave those
 #      out (a rerun of the full list would reply twice).
 #   4. Never push the default branch from here.
+#   5. A push to a branch whose PR is already merged or closed goes nowhere:
+#      the commits never reach the base branch. On Japanized-for-WooCommerce
+#      PR #222 a record commit pushed two minutes after the merge was left
+#      behind and had to be cherry-picked onto main. `push` refuses when the
+#      branch has PRs and none of them is open (override: --allow-closed-pr).
+#      A branch with no PR yet (the first push, before `gh pr create`) is fine.
 #
 # Usage:
-#   gate-round.sh push [<branch>] [--remote <name>]
+#   gate-round.sh push [<branch>] [--remote <name>] [--allow-closed-pr]
 #       Capture T, `git push -u <remote> <branch>` (default: the current
 #       branch, origin), then print `HEAD=<short sha>` and `T=<ISO8601 UTC>`.
-#       Refuses main / master / the remote's default branch. Uncommitted
-#       changes are not part of the push; they are reported on stderr.
+#       Refuses main / master / the remote's default branch, and a branch
+#       whose PRs are all merged or closed. Uncommitted changes are not part
+#       of the push; they are reported on stderr.
 #
 #   gate-round.sh publish <PR> --summary <FILE>
 #                         [--done <THREAD_ID>=<REPLY_FILE>]...
@@ -63,7 +70,8 @@ done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 usage() {
-	sed -n '3,51p' "$0" | sed 's/^# \{0,1\}//'
+	# The header comment, up to the first line that is not a comment.
+	awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"
 	exit 64
 }
 
@@ -95,11 +103,38 @@ default_branch() {
 	echo "${ref#origin/}"
 }
 
+# Refuse when the branch has PRs and none of them is open (rule 5). `gh pr
+# list --head` is used rather than `gh pr view <branch>`, which picks one PR
+# by its own preference; here every PR for the branch is seen. When gh cannot
+# answer, warn and let the push go: the check is a safety net, and a missing
+# gh or an auth problem should not block a gate round.
+check_pr_open() {
+	local branch="$1" out
+	if ! command -v gh >/dev/null 2>&1; then
+		echo "gate-round: warning: gh not found; could not check whether a PR for $branch is still open" >&2
+		return 0
+	fi
+	if ! out="$(gh pr list --head "$branch" --state all --limit 100 \
+		--json number,state --jq '.[] | "\(.number) \(.state)"' 2>&1)"; then
+		echo "gate-round: warning: could not check whether a PR for $branch is still open: $out" >&2
+		return 0
+	fi
+	# No PR yet: the first push, before `gh pr create`.
+	[ -n "$out" ] || return 0
+	if printf '%s\n' "$out" | grep -q ' OPEN$'; then
+		return 0
+	fi
+	local prs
+	prs="$(printf '%s\n' "$out" | sed 's/^/#/' | paste -sd ',' - | sed 's/,/, /g')"
+	die "refusing to push $branch: none of its PRs is open ($prs). These commits would not reach the base branch; land them another way (a new PR, or a cherry-pick where docs-only commits may go straight to the base branch), or pass --allow-closed-pr"
+}
+
 cmd_push() {
-	local remote="origin" branch=""
+	local remote="origin" branch="" allow_closed_pr=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--remote) [ $# -ge 2 ] || die "--remote needs a name"; remote="$2"; shift 2 ;;
+			--allow-closed-pr) allow_closed_pr=1; shift ;;
 			-*) die "unknown option for push: $1" ;;
 			*) [ -z "$branch" ] || die "push takes at most one branch"; branch="$1"; shift ;;
 		esac
@@ -112,6 +147,10 @@ cmd_push() {
 	dflt="$(default_branch)"
 	if [ "$branch" = "main" ] || [ "$branch" = "master" ] || { [ -n "$dflt" ] && [ "$branch" = "$dflt" ]; }; then
 		die "refusing to push the default branch ($branch) from a gate round"
+	fi
+
+	if [ "$allow_closed_pr" -eq 0 ]; then
+		check_pr_open "$branch"
 	fi
 
 	if [ -n "$(git status --porcelain)" ]; then
