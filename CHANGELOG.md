@@ -214,6 +214,13 @@
 - `wc-block-development` / `wc-development`: 確認済みバージョンを WooCommerce 11.1.2（2026-09-22）・WordPress 7.1.2 に
   更新（確認日 2026-10-06。11.2.0 は RC）。`wc-development` の `references/blocks-integration.md` に「支払い方法に依存する
   合計」の節を追加し、`extensionCartUpdate` で独自の支払い方法キーを持たないよう注意書きを入れた。
+- `post-merge`: 手順 3「マージ後に確認する項目を拾う」を追加（以降の手順は 4〜7 に繰り下げ）。PR 本文の未チェックの項目
+  （`- [ ]`）を抜き出し、マージコミットの CI・手元・確認不能の 3 つに分けて扱う。CI は `mergeCommit.oid` の sha で引き
+  （`gh run list --branch <default>` が古い run だけを返したことがある）、実行中ならバックグラウンドで待つ。
+  あわせて手順 1・2 に、現在のブランチの PR が未マージだった場合の扱い（直近にマージされた PR を対象にし、作業ブランチから
+  離れずに `git fetch origin <default>:<default>` で最新化する）を追記。引数に PR 番号も取れるようにした。
+  背景: jp4wc-pro の PR #5 で「PR では走らない E2E をマージ後に確認する」を後始末で拾う必要があり、PR #3 の後始末は
+  PR #5 のブランチ上で実行された。
 - `wc-wp-env`: `@wordpress/scripts` と `@wordpress/env` 11.x の peer 衝突を手順とハマりどころに追記（troubleshooting §10）。
   `@wordpress/scripts` 30.x は `@wordpress/env ^10` を optional peer に持ち、`^11` を足すと `npm install` は通るのに
   `npm ci` だけが ERESOLVE で落ちる（jp4wc-pro PR #5 の CI で発覚）。手順 4 は `@wordpress/env@^11` と版を明示して
