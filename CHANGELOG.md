@@ -131,6 +131,13 @@
   時は警告して続行する。あわせて `help` の表示を、行番号の決め打ちからヘッダーコメントの終わりまでに変えた。
   シナリオテストを 32 → 46 件に（マージ済み・クローズ済みで拒否、dry-run でも拒否、同名ブランチの新しい PR が開いていれば通す、
   `gh` の失敗で続行、`--allow-closed-pr`、help の範囲）。
+- `dev-cycle`: `request-gate-review.sh` が Codex の「Codex Review Summary」コメント（`<!-- codex-pull-request-review-summary -->`）を
+  応答と数え、PR で最初の依頼のときに Codex が実行中（🔄 Running）のまま `CODEX=responded` を返していた。要約コメントは PR ごとに
+  1 件の状態表示で、本当の応答（レビュー・「指摘なし」のコメント）の数秒後に ✅ Completed へ書き換えられる。応答の数から外し、
+  待ちの各行に `codex-summary=<状態>@<sha>` を出し、時間切れの時は「まだ実行中なので `--wait-only` で待ち直す」か「Completed なのに
+  応答が見つからない」かを伝える。あわせて、Codex が説明している「指摘なし」の印である PR 本文への 👍（`T` 以降）を応答に数える。
+  シナリオテストを 94 → 107 件に（Running のまま時間切れ、Running の後にレビュー、Completed だけ、別コミットの要約、👍 の新旧）。
+  saai-pi4t の PR #5・#6 で発生（要約コメントの編集履歴で Running の実際の文面を確認）。
 - `dev-env`: `verify-ports.sh` が @wordpress/env 11.16.0 の環境で必ず「no running WordPress container … (instance '?')」で
   FAIL していた。11.16.0 には `wp-env install-path` が無く（何も出力せず exit 0）、インスタンス名を引けなかったため。
   `install-path` が空なら `wp-env status --json` の `installPath` から引く。シナリオテストを 40 → 47 件に（status からの解決、

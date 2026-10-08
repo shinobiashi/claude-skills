@@ -284,7 +284,13 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   2026-09-24)では `gh pr edit` の依頼が 0 秒で pending 一覧に現れ、2 分後にレビューが届いた
 - 応答の判定は提出時刻ではなく **review の `commit_id` が現 HEAD と一致するか**で行う(両 bot とも
   1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある)。Codex は加えて
-  `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")も応答と見なす
+  `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")と、PR 本文への `T` 以降の 👍
+  (Codex が説明している「指摘なし」の印)も応答と見なす。**「Codex Review Summary」コメント**
+  (`<!-- codex-pull-request-review-summary -->`)は応答と見なさない。PR ごとに 1 件で、Codex が動き出した時点で
+  「🔄 Running」として作られ、本当の応答の数秒後に「✅ Completed」へ書き換えられる状態表示だから(以前は応答と数えたため、
+  PR で最初の依頼のときに実行中のまま待ちを終えていた。saai-pi4t PR #5・#6、2026-10-06)。その状態は待ちの各行に
+  `codex-summary=Running@<sha>` の形で出し、時間切れの時は「まだ実行中なので `--wait-only` で待ち直す」か
+  「Completed なのに応答が見つからない」かを伝える
 - `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
   `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
 - `--wait-ci` の時は依頼より前に `gh pr checks <N> --json name,bucket` を 20 秒ごとに見て、現 HEAD の check が

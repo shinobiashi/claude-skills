@@ -36,7 +36,16 @@
 #   inside this round's wait window would otherwise pass as a fresh
 #   response. Codex additionally counts as responded when it posts an issue
 #   comment after T (its "Didn't find any major issues" note has no review
-#   object).
+#   object) or puts 👍 on the PR body after T (its documented no-findings
+#   sign).
+# - Codex's "Codex Review Summary" comment (marked
+#   `<!-- codex-pull-request-review-summary -->`) is a status board, not a
+#   response: it appears as "🔄 Running" the moment Codex starts, and is
+#   edited to "✅ Completed" a few seconds after the real response
+#   lands. It used to count as a response, so on a PR's first request the
+#   wait ended while Codex was still running (saai-pi4t PR #5 and #6,
+#   2026-10-06). It is excluded from the count; its state is shown in each
+#   poll line and explained on a timeout.
 # - Codex is only asked for when `--request-codex` is given: on
 #   repositories where Codex auto-reviews every push, posting "@codex
 #   review" just yields a "connect a Codex account" reply, and the
@@ -257,6 +266,7 @@ CONFIRM_TOTAL=300
 # object that may or may not carry `login`.
 COPILOT='((.login // "") | ascii_downcase | . == "copilot" or startswith("copilot-pull-request-reviewer"))'
 CODEX_LOGIN='chatgpt-codex-connector[bot]'
+CODEX_SUMMARY_MARK='<!-- codex-pull-request-review-summary -->'
 
 # One paginated `gh api` probe reduced to a single number. `--paginate`
 # emits one JSON document per page (gh documents that pages stay separate
@@ -279,6 +289,26 @@ probe_count() {
 			;;
 	esac
 	printf '%s' "$out"
+}
+
+# `<status>@<commit>` from Codex's summary comment, read off its table row
+# ("| 📝 **Code Review** | 🔄 **Running** since … | `a70dda6` | …", or
+# "✅ **Completed** …"); `none` without such a comment, `unknown` when it
+# cannot be read or parsed. For the log and the timeout message only — it
+# never decides whether Codex responded.
+codex_summary_state() {
+	local out
+	out="$(gh api --paginate "repos/$slug/issues/$pr/comments" 2>/dev/null | jq -rs --arg l "$CODEX_LOGIN" --arg m "$CODEX_SUMMARY_MARK" '
+		[.[] | if type == "array" then .[] else . end
+		 | select(.user.login == $l and ((.body // "") | contains($m)))] | last
+		| if . == null then "none"
+		  else [.body | scan("\\*\\*([A-Za-z][A-Za-z ]*)\\*\\*[^|\\n]*\\|\\s*`([0-9a-f]{7,40})`")] | .[0]
+		       | if . == null then "unknown" else "\(.[0] | gsub(" "; "-"))@\(.[1])" end
+		  end' 2>/dev/null)" || out=""
+	case "$out" in
+		''|*[[:space:]]*) echo unknown ;;
+		*) printf '%s' "$out" ;;
+	esac
 }
 
 # 1 while the GraphQL `reviewRequests` (what the web UI shows as pending
@@ -490,6 +520,7 @@ if [ "$want_copilot" -eq 0 ] && [ "$want_codex" -eq 0 ]; then
 	finish "$(exit_code_for 1)"
 fi
 
+codex_summary=none
 deadline=$((SECONDS + timeout))
 while :; do
 	c=-
@@ -499,16 +530,21 @@ while :; do
 	# Codex have both taken well over an hour to respond at times), and a
 	# time-only check would mistake that stale review for a response to
 	# the current commit. Codex's no-findings note is an issue comment with
-	# no commit, so it is matched by time (T, inclusive) instead.
+	# no commit, and its 👍 a reaction, so both are matched by time (T,
+	# inclusive) instead. The summary comment is left out (see header).
 	if [ "$want_copilot" -eq 1 ]; then
 		c="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(((.user // {}) | $COPILOT) and .commit_id == \"$head_sha\")] | length")"
 	fi
+	summary_note=""
 	if [ "$want_codex" -eq 1 ]; then
 		xr="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .commit_id == \"$head_sha\")] | length")"
-		xc="$(probe_count "repos/$slug/issues/$pr/comments" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .created_at >= \"$T\")] | length")"
-		x=$((xr + xc))
+		xc="$(probe_count "repos/$slug/issues/$pr/comments" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .created_at >= \"$T\" and ((.body // \"\") | contains(\"$CODEX_SUMMARY_MARK\") | not))] | length")"
+		xt="$(probe_count "repos/$slug/issues/$pr/reactions" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .content == \"+1\" and .created_at >= \"$T\")] | length")"
+		x=$((xr + xc + xt))
+		codex_summary="$(codex_summary_state)"
+		summary_note=" codex-summary=$codex_summary"
 	fi
-	echo "$(date -u +%H:%M:%S) copilot=$c codex=$x"
+	echo "$(date -u +%H:%M:%S) copilot=$c codex=$x$summary_note"
 
 	all=1
 	if [ "$want_copilot" -eq 1 ]; then
@@ -527,4 +563,21 @@ done
 [ "$want_copilot" -eq 1 ] && [ "$copilot_status" != responded ] && copilot_status=timeout
 [ "$want_codex" -eq 1 ] && [ "$codex_status" != responded ] && codex_status=timeout
 echo "request-gate-review: timed out waiting for a response" >&2
+# What Codex's summary comment says about the current head, when it says
+# anything: the cheapest hint at what to do next.
+if [ "$codex_status" = timeout ]; then
+	summary_sha="${codex_summary#*@}"
+	case "$codex_summary" in
+		*@*) case "$head_sha" in "$summary_sha"*) ;; *) summary_sha="" ;; esac ;;
+		*) summary_sha="" ;;
+	esac
+	if [ -n "$summary_sha" ]; then
+		case "${codex_summary%%@*}" in
+			Completed)
+				echo "request-gate-review: Codex's summary comment says Completed for $summary_sha, but no review, comment or 👍 of this round was found — look at the PR before asking again" >&2 ;;
+			*)
+				echo "request-gate-review: Codex is still reviewing $summary_sha (its summary comment says ${codex_summary%%@*}) — wait again with --wait-only --since $T" >&2 ;;
+		esac
+	fi
+fi
 finish "$(exit_code_for 1)"

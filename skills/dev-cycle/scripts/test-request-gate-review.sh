@@ -48,6 +48,10 @@ EOS
 #                          from the start
 #   FAKE_CODEX_AFTER       nth reviews probe from which a Codex review exists
 #   FAKE_CODEX_COMMENT_AFTER  nth comments probe from which a Codex comment exists
+#   FAKE_CODEX_SUMMARY     Running | Completed: Codex's "Codex Review Summary" comment
+#                          exists from the start, in that state (the real table row)
+#   FAKE_CODEX_SUMMARY_SHA commit in that row (default: the first 7 of FAKE_HEAD)
+#   FAKE_CODEX_THUMBS      new | old: Codex's 👍 on the PR body, given now or in January
 #   FAKE_CI                `gh pr checks` answer from the (FAKE_CI_PENDING+1)th call on:
 #                          pass | fail | none (no checks: gh's error) | pending (forever)
 #   FAKE_CI_PENDING        number of `gh pr checks` calls that report a check still running
@@ -126,11 +130,27 @@ case "$1 $2" in
 				echo "[$items]" ;;
 			*/comments)
 				n="$(count comments)"
+				items=""
+				if [ -n "${FAKE_CODEX_SUMMARY:-}" ]; then
+					items="$(jq -cn --arg st "$FAKE_CODEX_SUMMARY" --arg sha "${FAKE_CODEX_SUMMARY_SHA:-${FAKE_HEAD:0:7}}" --arg now "$(now)" '
+						{user: {login: "chatgpt-codex-connector[bot]"}, created_at: $now, updated_at: $now,
+						 body: ("<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+							+ "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+							+ "| 📝 **Code Review** | "
+							+ (if $st == "Running" then "🔄 **Running** since" else "✅ **Completed**" end)
+							+ " <relative-time datetime=\"2026-10-06T21:55:21.778548Z\">2026-10-06T21:55:21.778548Z</relative-time> | `"
+							+ $sha + "` | Manual request |\n")}')"
+				fi
 				if [ -n "${FAKE_CODEX_COMMENT_AFTER:-}" ] && [ "$n" -ge "$FAKE_CODEX_COMMENT_AFTER" ]; then
-					printf '[{"user":{"login":"chatgpt-codex-connector[bot]"},"created_at":"%s"}]\n' "$(now)"
-				else
-					echo '[]'
-				fi ;;
+					items="${items:+$items,}{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"created_at\":\"$(now)\",\"body\":\"Codex Review: Didn't find any major issues.\"}"
+				fi
+				echo "[$items]" ;;
+			*/reactions)
+				case "${FAKE_CODEX_THUMBS:-}" in
+					new) printf '[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"%s"}]\n' "$(now)" ;;
+					old) echo '[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"+1","created_at":"2026-01-05T00:00:00Z"}]' ;;
+					*) echo '[]' ;;
+				esac ;;
 			*) echo "unexpected gh api call: $*" >&2; exit 99 ;;
 		esac
 		exit 0 ;;
@@ -266,6 +286,33 @@ echo "== Codex: the no-findings note (issue comment after T) counts"
 FAKE_CODEX_COMMENT_AFTER=1 run 5 --codex-only --request-codex --timeout 5
 check "exit 0" rc_is 0
 check "CODEX=responded" has "^CODEX=responded$"
+
+echo "== Codex: the Running summary comment is not a response (saai-pi4t PR #5 / #6 G1)"
+FAKE_CODEX_SUMMARY=Running run 5 --codex-only --request-codex --timeout 1
+check "exit 1 (timeout) while the summary only says Running" rc_is 1
+check "CODEX=timeout" has "^CODEX=timeout$"
+check "the poll line shows the summary state" has "codex=0 codex-summary=Running@${HEAD:0:7}"
+check "the timeout says Codex is still reviewing the head" has "Codex is still reviewing ${HEAD:0:7}"
+
+FAKE_CODEX_SUMMARY=Running FAKE_CODEX_AFTER=2 run 5 --codex-only --request-codex --timeout 120
+check "Running summary, then a review of the head: exit 0" rc_is 0
+check "CODEX=responded" has "^CODEX=responded$"
+check "waited for the review (two polls)" call_count "sleep 60" 1
+
+FAKE_CODEX_SUMMARY=Completed run 5 --codex-only --request-codex --timeout 1
+check "a Completed summary alone is not a response (exit 1)" rc_is 1
+check "the timeout points at the missing review, comment or thumbs-up" has "says Completed for ${HEAD:0:7}, but"
+
+FAKE_CODEX_SUMMARY=Running FAKE_CODEX_SUMMARY_SHA="${OLD:0:7}" run 5 --codex-only --request-codex --timeout 1
+check "a summary about another commit is not called a review of the head" hasnt "still reviewing"
+
+echo "== Codex: a thumbs-up on the PR body after T counts (its no-findings sign)"
+FAKE_CODEX_THUMBS=new run 5 --codex-only --request-codex --timeout 5
+check "exit 0" rc_is 0
+check "CODEX=responded" has "^CODEX=responded$"
+
+FAKE_CODEX_THUMBS=old run 5 --codex-only --request-codex --since 2026-09-20T00:00:00Z --timeout 1
+check "a thumbs-up from before T is an earlier round (exit 1)" rc_is 1
 
 echo "== Copilot already pending before the run (leftover request)"
 FAKE_PENDING_INITIAL=1 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=30 run 5 --copilot-only --timeout 5
