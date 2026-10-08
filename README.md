@@ -127,6 +127,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`wp-security-check`](skills/wp-security-check/SKILL.md) | Use for security audits of WordPress plugins: nonce validation, capability checks, input… |
 | [`wp-i18n`](skills/wp-i18n/SKILL.md) | Use when setting up internationalization (i18n/l10n) for WordPress plugins or themes: te… |
 | [`wp-org-release`](skills/wp-org-release/SKILL.md) | Use when publishing or releasing a WordPress plugin to the WordPress.org plugin director… |
+| [`release-bump`](skills/release-bump/SKILL.md) | タグ push で wp.org へ自動デプロイするプラグインの「バージョン bump PR → 後から入った fix PR の changelog 追記 → マージ前チェック → タグ push」。`@since` を巻き込まない版数の書き換え、前タグ以降の PR と changelog の突き合わせ、v 無しタグを本流だけに push… |
 
 ### 開発ワークフロー
 

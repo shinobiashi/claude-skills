@@ -5,6 +5,17 @@
 ## [Unreleased]
 
 ### Added
+- `release-bump`: 新規。タグ push で wp.org へ自動デプロイするプラグインのリリース作業を 5 つのモードに分けた司令塔:
+  `start <ver>`（`release/<ver>` を切って版数ファイルを書き換え、前タグ以降の PR から changelog を起草し、本流へ push して bump PR を作る）、
+  `add [<PR>...]`（bump PR を開いた後にマージされた fix PR の changelog 行を release ブランチへ追記）、`check`（版数の不一致・
+  changelog の見出し・参照されていない PR・main からの遅れ・POT 再生成の要否）、`sync`（main を release ブランチへ merge。
+  rebase + force push はしない）、`tag <ver>`（v 無しのタグを本流だけへ push。必ず AskUserQuestion の後）。
+  `scripts/release-bump.sh` が機械的な部分を担う: 現行版数を持つ行を「書き換える行（保存先）」と「触らない行（言及）」に分類し、
+  `@since` docblock と changelog 見出しは対象外、`npm version --ignore-scripts` で package.json / package-lock.json、
+  `gh pr list` の `mergeCommit` を前タグとの祖先関係で絞り込んで changelog の `#<PR>` / `#<issue>` 参照と突き合わせる。
+  シナリオテスト 77 件（`scripts/test-release-bump.sh`、bash 3.2 / BSD awk で動く）。
+  背景: Japanized-for-WooCommerce 2.9.17 の bump PR #229 を開いた後に #228・#230 がマージされ、changelog 行を 2 回とも手で
+  追記することになった（post-merge の手順 6 で提案 → ユーザー指示で実装）。2026-07-08 に提案した `/release-bump` と統合。
 - `ssm-provider`: 新規。Signal Mail for WooCommerce（`saai-signal-mail`）の配信プロバイダを実装・レビューする手順。
   `ProviderInterface` の契約の写し、`SendResult` の retryable 規則、Webhook 検証と `DeliveryEvent` 正規化、`discover_settings()`
   （ADR-0009）、必須 PHPUnit 13 項目と `pre_http_request` モックの雛形、有料アドオンの骨格、`scripts/sign-webhook.php`
