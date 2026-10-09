@@ -175,8 +175,8 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
 2. 承認された計画どおりに実装する。計画外の変更が必要になったら「人間に確認する条件」に従い停止する
 3. 品質チェックを green にする(2回の修正で無理なら停止)
 4. 論理単位ごとに commit する(Conventional Commits・英語・`git add <path>` で明示的に追加。
-   `git add -A` は使わない)。review-loop は `git diff main...HEAD` を対象にするため、
-   **実装は commit 済みの状態で Step 3 へ進む**
+   `git add -A` は使わない)。review-loop は未コミット差分もスナップショットで扱えるが、各ラウンドの対象と修正を
+   commit 単位で追えるように、**実装は commit 済みの状態で Step 3 へ進む**
 
 ### Step 3. review-loop(PR 前レビュー)
 

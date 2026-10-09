@@ -217,6 +217,15 @@
   を明記した
 
 ### Changed
+- `review-loop`: 各ラウンドの対象を作業ツリーのスナップショットとして記録する `scripts/snapshot.sh` を追加し、R1〜R3 の差分の
+  取り方を HEAD 起点からスナップショット起点に変えた。`save R<n>` は未コミット差分と未追跡ファイルを含む作業ツリーを、HEAD を親にした
+  コミットとして `refs/review-loop/<branch>/R<n>` に記録する（HEAD・index・ブランチ・ファイルは変えない）。R1 は
+  `git diff <base>...refs/review-loop/<branch>/R1`、R2 は `snapshot.sh diff R1 R2` で取る。commit せずに次ラウンドへ進んでも
+  前ラウンドの修正だけが取れ、未追跡の新規ファイルも漏れない。シナリオテスト 32 件（`scripts/test-snapshot.sh`）。
+  背景: paidy-wc PR #40 で R1 を未コミット差分 + 未追跡の新規スクリプトで始め、R1 の修正も同じ作業ツリーに入ったため、
+  R2 の「R1 の修正差分」を保存しておいた patch から作り直すことになった（`git archive` は `export-ignore` の `.claude/`・`docs/` を
+  黙って落とした。post-merge の手順 6 で提案 → ユーザー指示で実装）。`dev-cycle` の「review-loop は `git diff main...HEAD` を
+  対象にする」という理由の記述も合わせて直した。
 - `dev-cycle`: Step 7 の収束判定と終了条件を明記。新規指摘をすべて保留にして修正が無かったラウンドでも、新規指摘があった bot は
   未収束なので、依頼回数が 3 未満なら再依頼する（同じ HEAD を飛ばすのは `sequential` 専用の規則）。再依頼せずに終える時は
   AskUserQuestion で確認し、最終報告の状態に「未収束（ユーザー判断で終了）」と書く。状態の区別に「上限」（3 回目の依頼でも
