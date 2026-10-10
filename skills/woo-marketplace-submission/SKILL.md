@@ -95,23 +95,34 @@ echo "Created ${PLUGIN_SLUG}.zip (v${VERSION})"
 
 ### changelog.txt のフォーマット
 
+公式: [Formatting for Changelog.txt](https://developer.woocommerce.com/docs/extensions/core-concepts/changelog-txt/)（2026-10-10 確認）
+
 ```
 *** My Extension Changelog ***
 
-= 1.1.0 - 2026-09-05 =
+2026-09-05 - version 1.1.0
 * Feature - Added new payment method support
 * Tweak - Improved order processing performance
 * Fix - Resolved checkout validation issue with block editor
 
-= 1.0.1 - 2026-08-10 =
+2026-08-10 - version 1.0.1
 * Fix - Fixed compatibility issue with WooCommerce 11.0
 * Fix - Corrected translation string for Japanese locale
 
-= 1.0.0 - 2026-06-01 =
+2026-06-01 - version 1.0.0
 * Feature - Initial release
 ```
 
-エントリタイプ: `Feature`, `Tweak`, `Fix`, `Dev`, `Update`
+- 各リリースの見出しは **`YYYY-MM-DD - version x.y.z`**（日付が先）。WordPress.org の readme.txt 風の
+  `= 1.0.0 - 2026-06-01 =` は**この形式ではない**。「The `changelog.txt` file provided does not match the
+  expected format」としてアップロードを拒否されうる（Product update guidelines が挙げるアップロード失敗理由の 1 つ）。
+  saai-knowledge PR #75 の PR 前レビューで、このスキルの以前の例（readme 風の見出し）をそのまま写していたことが発覚した
+- 先頭はタイトル行（`*** … Changelog ***`）と空行。リリースごとに空行で区切り、新しい版を上に書く
+- 各行は `* <エントリタイプ> - <説明>`。サブ項目は 1 段だけインデントでき、親と同じタイプとして扱われる。
+  タイプの無い行は製品ページで「Other」のアイコンになる
+
+エントリタイプ（公式に列挙されているもの）: `Add` / `Added`, `Feature`, `New`, `Developer` / `Dev`,
+`Tweak` / `Changed`, `Update`, `Delete` / `Remove`, `Fix` / `Fixed`
 
 バージョン番号が以下の3箇所で全て一致している必要がある:
 1. プラグインヘッダーの `Version:` フィールド

@@ -531,12 +531,13 @@ function my_extension_get_template( $template_name, $args = array() ) {
 
 ## changelog.txt
 
-マーケットプレイスアップロード時に `changelog.txt` の存在とフォーマットが検証される:
+マーケットプレイスアップロード時に `changelog.txt` の存在とフォーマットが検証される
+（公式: [Formatting for Changelog.txt](https://developer.woocommerce.com/docs/extensions/core-concepts/changelog-txt/)）:
 
 ```
 *** My Extension Changelog ***
 
-= 1.0.0 - 2025-04-01 =
+2025-04-01 - version 1.0.0
 * Feature - Initial release
 * Feature - HPOS support
 * Feature - Block checkout compatibility
@@ -544,6 +545,9 @@ function my_extension_get_template( $template_name, $args = array() ) {
 * Fix - Fixed validation error on checkout
 ```
 
+各リリースの見出しは `YYYY-MM-DD - version x.y.z`（日付が先）。WordPress.org の readme.txt 風の
+`= 1.0.0 - 2025-04-01 =` はこの形式ではなく、フォーマット不一致としてアップロードを拒否されうる。
+エントリタイプと詳細は `woo-marketplace-submission` スキルの「changelog.txt のフォーマット」を参照。
 バージョン番号はプラグインヘッダーの `Version` と一致させること。
 アップロード時によくあるエラーは「`changelog.txt` のフォーマット不一致」「ヘッダーの `Version` と
 アップロード時に入力したバージョンの不一致」「ヘッダーの `Version` と `changelog.txt` の不一致」。

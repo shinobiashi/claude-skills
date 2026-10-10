@@ -135,6 +135,12 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `woo-marketplace-submission` / `woo-marketplace-extension`: `changelog.txt` の例の見出しが WordPress.org の readme.txt 風
+  （`= 1.0.0 - 2026-06-01 =`）になっていた。WooCommerce.com の公式書式は `YYYY-MM-DD - version x.y.z`（日付が先）で、
+  書式違いは「The `changelog.txt` file provided does not match the expected format」としてアップロード拒否の理由になる。
+  saai-knowledge PR #75（有料版の申請前準備）で例をそのまま写した changelog と検証スクリプトを作り、PR 前レビューで発覚した。
+  両スキルの例を公式書式に直し、公式ページへのリンクと、公式に列挙されているエントリタイプ（`Added` / `Fixed` / `Changed` /
+  `Remove` などの別名を含む）を追記した。
 - `dev-cycle`: `gate-round.sh push` が、PR がマージ済み・クローズ済みのブランチにもそのまま push していた。マージの後に
   push したコミットは base に届かず取り残される（Japanized-for-WooCommerce PR #222 で、マージの 2 分後に push した記録用
   コミットを main へ cherry-pick し直した）。push の前に `gh pr list --head <branch> --state all` で PR を引き、PR があって
