@@ -223,6 +223,11 @@
   を明記した
 
 ### Changed
+- `post-merge`: 手順 3 に「マージコミットの CI run が実行中のうちは `<default>` へ push しない」を追加し、手順 5 の push を
+  その run の完了後にした。workflow の `concurrency` が `cancel-in-progress: true` で `group` が `github.ref` 単位だと、蒸留コミットの
+  push がマージコミットの run を途中で cancel する（saai-signal-mail PR #6 で 10 ジョブ success のあと E2E だけ `cancelled`）。
+  `grep -A2 '^concurrency' .github/workflows/*.yml` で確かめ、該当すれば commit まで済ませて背景の watch の完了を待つ。先に push
+  してしまったら、新しい HEAD の run を sha で引いて報告する（docs だけのコミットなら同じコードの検証になる）。
 - `review-loop`: 各ラウンドの対象を作業ツリーのスナップショットとして記録する `scripts/snapshot.sh` を追加し、R1〜R3 の差分の
   取り方を HEAD 起点からスナップショット起点に変えた。`save R<n>` は未コミット差分と未追跡ファイルを含む作業ツリーを、HEAD を親にした
   コミットとして `refs/review-loop/<branch>/R<n>` に記録する（HEAD・index・ブランチ・ファイルは変えない）。R1 は
