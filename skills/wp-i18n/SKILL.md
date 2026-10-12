@@ -1,6 +1,6 @@
 ---
 name: wp-i18n
-version: "1.0.0"
+version: "1.1.0"
 description: "Use when setting up internationalization (i18n/l10n) for WordPress plugins or themes: text domain configuration, POT file generation, block JSON translations (make-json), wp_set_script_translations, and submitting to translate.wordpress.org."
 compatibility: "Targets WordPress 6.6+. Requires WP-CLI 2.x. Node.js / @wordpress/scripts required for JS/block translation workflows."
 ---
@@ -13,6 +13,7 @@ Use this skill when working on WordPress plugin or theme internationalization, f
 
 - Setting up or auditing text domain configuration (plugin header, `load_plugin_textdomain`)
 - Generating or regenerating `.pot` files for translators
+- Adding a single new string to a bundled `.pot` / `.po` / `.mo` by hand inside a feature PR (no `msgmerge`)
 - Generating block translation JSON files (`wp i18n make-json`)
 - Registering `wp_set_script_translations` for JS/block scripts
 - Adding `i18n` npm scripts to `package.json`
@@ -85,6 +86,47 @@ wp i18n make-pot . languages/my-plugin.pot \
 ```
 
 See: `references/pot-generation.md`
+
+### 3b) Add one string by hand inside a feature PR
+
+A feature or fix PR that adds a user-facing PHP string should not regenerate the translation files: `msgmerge --update`
+against a `.pot` that has not been regenerated for a while drops long-obsolete entries and rewraps the whole `.po`, so one
+new string becomes a 1000+ line diff. Add only the new entry, and leave a full resync to a dedicated POT-regeneration PR.
+
+`scripts/po-add-entry.py` does this and checks the result (python3 + GNU gettext `msgfmt` / `msgcat`):
+
+```bash
+P=<this skill's base directory>/scripts/po-add-entry.py
+
+python3 "$P" --msgid 'Payment failed. Please try again.' \
+    --pot i18n/my-plugin.pot \
+    --po i18n/my-plugin-ja.po --msgstr '決済に失敗しました。もう一度お試しください。'
+# _n(): --msgid-plural '%d items' and one --msgstr per plural form of the .po (ja: 1)
+# _x(): --context 'noun'    translators comment: --comment 'translators: %s: order number'
+# --ref PATH:LINE (repeatable) when the string is not a literal first argument of a gettext call
+# --after '<existing msgid>' to place it next to a related entry; --dry-run to only print
+```
+
+- **References**: `git grep` finds the string as the first argument of a gettext call in the PHP files (untracked
+  ones too), skipping `vendor/`, `node_modules/`, `test/` and `tests/` like `make-pot`. For `__(` alone on a line, the
+  reference is the call's line, as WP-CLI writes it.
+- **Placement and style**: next to the entry with the nearest earlier reference in the same source file, in each file's
+  own style — one `#:` line per reference and no wrapping for a WP-CLI `.pot`, gettext wrapping at 79 columns (`msgcat`,
+  which matches Poedit and `msgmerge`) for a wrapped `.po`. `#, php-format` is added the way `make-pot` decides it
+  (same placeholder regex), and `msgfmt --check-format` checks the translation's placeholders.
+- **The `.mo` check**: the `.mo` is rebuilt with `msgfmt` and compared with the old one entry by entry. Any difference
+  besides the new string means the old `.mo` was not built from this `.po`; nothing is written (`--accept-mo-drift` keeps
+  it anyway — better rebuild the `.mo` in its own commit first). With a `.l10n.php` next to the `.po`, it says to
+  regenerate that too, since WordPress 6.5+ loads it instead of the `.mo`.
+- **Already there**: a `.pot` that already has the entry is left alone (so one run per locale works); a `.po` that has it
+  is refused — edit that entry by hand.
+- Exit codes: `0` done (with `--dry-run`: would be done) / `1` refused or a check failed, nothing written / `2` usage or
+  setup error (including a string it cannot find without `--ref`).
+- PHP strings only. A string used by a script also needs its `{domain}-{locale}-{md5}.json` entry (step 4).
+- A translation in the bundled `.po` / `.mo` reaches only sites without a WordPress.org language pack (the pack wins);
+  also add it on translate.wordpress.org (step 8).
+- Tests: `bash scripts/test-po-add-entry.sh "$PWD/scripts/po-add-entry.py"` (60 scenarios, no network; the path must be
+  absolute).
 
 ### 4) Generate block translation JSON files (if blocks exist)
 

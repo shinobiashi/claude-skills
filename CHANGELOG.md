@@ -5,6 +5,17 @@
 ## [Unreleased]
 
 ### Added
+- `wp-i18n`: `scripts/po-add-entry.py` を追加（1.1.0）。機能 PR の中で、新しい PHP の文字列 1 件だけを `.pot` / `.po` に
+  手で足し、`.mo` を作り直す。`msgmerge --update` は古い `.pot` に合わせて廃止済みの項目を消し、`.po` 全体を折り返し直すので、
+  1 件の追加が 1000 行超の差分になる。参照行は `git grep` で gettext 呼び出しの第 1 引数から探す（`vendor/`・`node_modules/`・
+  `test(s)/` を除くのは `make-pot` と同じ。`__(` だけの行は呼び出しの行）。差し込む位置は、同じソースファイルで参照行が直前の項目の隣。
+  書式は各ファイルに合わせる（WP-CLI の `.pot` は折り返さず `#:` を 1 行ずつ。折り返された `.po` は `msgcat --width=79`。Poedit の
+  折り返しと一致することを JP4WC の `.po` で確認）。`#, php-format` は WP-CLI と同じ正規表現で判定（JP4WC の `.pot` 558 件で一致）し、
+  訳のプレースホルダーを `msgfmt --check-format` で確かめる。作り直した `.mo` を古い `.mo` と項目ごとに比べ、新しい 1 件以外の
+  違いがあれば何も書かない（古い `.mo` がこの `.po` から作られていない）。隣に `.l10n.php` があれば作り直すよう伝える。
+  シナリオテスト 60 件（`scripts/test-po-add-entry.sh`）。JP4WC #243 の手作業（7ac097d）を再現し、`.pot` と `.mo` が一致した。
+  背景: #241・#243 で同じ手作業（`.pot`・`.po` へ 1 件ずつ追加 → `msgfmt` → `msgunfmt` で前後の差分を確認）を繰り返した
+  （post-merge の手順 6 で提案 → ユーザー指示で実装）。
 - `release-bump`: 新規。タグ push で wp.org へ自動デプロイするプラグインのリリース作業を 5 つのモードに分けた司令塔:
   `start <ver>`（`release/<ver>` を切って版数ファイルを書き換え、前タグ以降の PR から changelog を起草し、本流へ push して bump PR を作る）、
   `add [<PR>...]`（bump PR を開いた後にマージされた fix PR の changelog 行を release ブランチへ追記）、`check`（版数の不一致・
