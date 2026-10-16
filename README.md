@@ -140,6 +140,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`ci-triage`](skills/ci-triage/SKILL.md) | GitHub Actions の CI 失敗を「コード起因」か「インフラ起因（課金・ランナー・ ワークフロー設定・キャッシュ）」かに切り分けるスキル。失敗ジョブの所要時間と ス… |
 | [`fix-copilot-review`](skills/fix-copilot-review/SKILL.md) | Fetch unresolved PR review comments from any bot reviewer — GitHub Copilot, Codex (chatg… |
 | [`post-merge`](skills/post-merge/SKILL.md) | PRがマージされた後の後始末を行う。デフォルトブランチの最新化、マージ済みローカルブランチとworktreeの片付け、今回の学びをCLAUDE.mdへ蒸留＋剪定、繰り返しパター… |
+| [`todo-progress`](skills/todo-progress/SKILL.md) | TODO.md などのチェックリストを節ごとに数え、`--check` で進捗サマリーの表（「完了 / 全体」「割合%」）と照らす。PR を作る前の進捗の数え直しに、どのリポジトリでも同じスクリプトを使う |
 | [`adr`](skills/adr/SKILL.md) | ADR（Architecture Decision Record）を起票・更新・Supersede するスキル。 「ADR を起票して」「ADR-000X を書いて」「この設計… |
 
 ### ドキュメント

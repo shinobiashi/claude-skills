@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ### Added
+- `todo-progress`: 新規。TODO.md などのチェックリストを節（`## `）ごとに数え、`--check` でファイル先頭の進捗サマリーの表
+  （「完了 / 全体」「割合%」）と照らす `scripts/todo-progress.sh`。表のラベルは節の見出しか見出しの先頭（「Phase 1」は
+  「Phase 10 — …」に当てない）で、太字・リンク・3 桁区切りを許す。ずれた行・表に行の無い節・合計の行の欠けで exit 1、
+  照らせる表が無ければ exit 2。コードブロックの中は数えず、割合は切り捨て。awk は `LC_ALL=C` で動かす（macOS の awk は
+  UTF-8 のロケールで、マルチバイト文字の 1 バイトにパターンを当てると「towc: multibyte conversion failure」で止まる）。
+  busybox の awk の癖（`[^\]]` の括弧式が空白を含む文字列で外れる、未設定の値を変数に写すと文字列で比べる）も避けた。
+  シナリオテスト 44 件（`scripts/test-todo-progress.sh`）。macOS の awk（bash 3.2 でも）・mawk・busybox の awk で pass。
+  背景: wcpdf-jp-v1 で TODO.md の付録 B の awk を PR ごとに貼って数えていたのを、どのリポジトリでも同じスクリプトで
+  数えて照らせるようにした（ユーザー指示）。
 - `wp-i18n`: `scripts/po-add-entry.py` を追加（1.1.0）。機能 PR の中で、新しい PHP の文字列 1 件だけを `.pot` / `.po` に
   手で足し、`.mo` を作り直す。`msgmerge --update` は古い `.pot` に合わせて廃止済みの項目を消し、`.po` 全体を折り返し直すので、
   1 件の追加が 1000 行超の差分になる。参照行は `git grep` で gettext 呼び出しの第 1 引数から探す（`vendor/`・`node_modules/`・
