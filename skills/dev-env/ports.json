@@ -32,6 +32,8 @@
 		{ "slot": 30, "repo": "wc-extention-plugin-template" },
 		{ "slot": 31, "repo": "wc4jp-gmo-pg" },
 		{ "slot": 32, "repo": "wc4jp-gmo-pg.bk" },
-		{ "slot": 33, "repo": "woocommerce-for-paygent-payment-main" }
+		{ "slot": 33, "repo": "woocommerce-for-paygent-payment-main" },
+		{ "slot": 34, "repo": "saai-signal-mail" },
+		{ "slot": 35, "repo": "wcpdf-jp-v1" }
 	]
 }
