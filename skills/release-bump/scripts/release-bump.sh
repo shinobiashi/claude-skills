@@ -18,7 +18,10 @@
 #       CARRIER line for every line that holds the version and is rewritten
 #       by `bump`, and a MENTION line for every other line that contains the
 #       version string and is left alone (docblock @since lines and changelog
-#       headings are history and are not even listed).
+#       headings are history and are not even listed). A docblock @version is
+#       a carrier only in a PHP file that holds another carrier (the plugin
+#       header, or the main class $version); elsewhere it is a class's own
+#       version and is not listed either.
 #
 #   prs [--since <tag>] [--changelog-ref <ref>] [--skip <n,n,...>]
 #       List the PRs merged into the default branch after <since> (default:
@@ -48,7 +51,8 @@
 #       every carrier holds the same version, that version has a changelog
 #       heading, every code PR since <since> is referenced in it, the branch
 #       is not behind the canonical default branch, and whether translation
-#       calls were added since <since> without the .pot changing after them.
+#       calls were changed since <since> without the .pot being regenerated
+#       after them (both read at HEAD, so a regen on the release branch counts).
 #       Exit 1 when something needs attention.
 #
 #   tag <version> [--remote <name>] [--dry-run]
@@ -138,8 +142,11 @@ previous_tag() {
 # Every line that contains the version, classified. Prints
 #   CARRIER<TAB>file<TAB>line<TAB>text   (rewritten by bump)
 #   MENTION<TAB>file<TAB>line<TAB>text   (left alone, shown for review)
-# @since/@version/@deprecated docblock lines and readme changelog headings are
-# history and are not printed at all.
+# @since/@deprecated docblock lines and readme changelog headings are history
+# and are not printed at all. A docblock `@version <version>` is a CARRIER in
+# a PHP file that holds another carrier (the plugin header, or the main class
+# with its $version: jp4wc-pro keeps the two in step) and is not printed
+# elsewhere, where it is a class's own version that happens to be equal.
 classify_lines() { # $1 = version, $2 = plugin file
 	local v="$1" plugin="$2" ve
 	ve="$(regex_escape "$v")"
@@ -153,18 +160,34 @@ classify_lines() { # $1 = version, $2 = plugin file
 			text = $0; sub(/^[^:]*:[^:]*:/, "", text)
 			# the version must stand on its own (2.9.1 is not 2.9.16)
 			if (text !~ ("(^|[^0-9.])" ve "([^0-9]|$)")) next
-			if (text ~ /@(since|version|deprecated)/) next
+			if (text ~ /@(since|deprecated)/) next
 			if (file == "readme.txt" && text ~ ("^= " ve "( |$)")) next
 			kind = "MENTION"
-			if (file == plugin && text ~ ("^[ \t]*\\*?[ \t]*Version:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
+			# decided in END, once the carriers of every file are known
+			if (text ~ /@version/) kind = (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("@version[ \t]+" ve "[ \t]*$")) ? "ATVERSION" : "SKIP"
+			else if (file == plugin && text ~ ("^[ \t]*\\*?[ \t]*Version:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
 			# \047 is the single quote: the program itself sits inside shell single quotes
 			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("define\\([ \t]*[\047\"][A-Za-z0-9_]*_VERSION[\047\"][ \t]*,[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
 			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("(VERSION|version)[ \t]*=[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
+			# WooCommerce API Manager client: new WC_AM_Client_2_12_2( __FILE__, null, 188, 'x.y.z', ... )
+			# passes the software version as a literal; a stale one makes the update check misreport
+			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ /WC_AM_Client[A-Za-z0-9_]*[ \t]*\(/ && text ~ ("[\047\"]" ve "[\047\"]")) kind = "CARRIER"
 			else if (file == "readme.txt" && text ~ ("^Stable tag:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
 			# top level only (one indent step: up to two spaces or one tab): a nested "version" belongs to something else
 			else if ((file == "package.json" || file == "composer.json") && text ~ ("^( ? ?|\t)\"version\":[ \t]*\"" ve "\"")) kind = "CARRIER"
-			else if (file == "CLAUDE.md") kind = "CARRIER"
-			printf "%s\t%s\t%s\t%s\n", kind, file, line, text
+			# CLAUDE.md: only a version declaration ("**Version**: x.y.z", "Version: x.y.z",
+			# "現バージョン: x.y.z"); prose such as "stored as entered since x.y.z" is history and stays
+			else if (file == "CLAUDE.md" && (text ~ ("[Vv]ersion[*]*:[ \t]*" ve "([^0-9]|$)") || text ~ ("バージョン[*]*(:|：)[ \t]*" ve "([^0-9]|$)"))) kind = "CARRIER"
+			n++; F[n] = file; L[n] = line; T[n] = text; K[n] = kind
+			if (kind == "CARRIER" && file ~ /\.php$/) carrier_php[file] = 1
+		}
+		END {
+			for (i = 1; i <= n; i++) {
+				kind = K[i]
+				if (kind == "SKIP") continue
+				if (kind == "ATVERSION") { if (!(F[i] in carrier_php)) continue; kind = "CARRIER" }
+				printf "%s\t%s\t%s\t%s\n", kind, F[i], L[i], T[i]
+			}
 		}'
 }
 
@@ -441,6 +464,7 @@ cmd_add_entries() {
 cmd_check() {
 	local since="" skip="" status=0 remote branch plugin version carriers n behind cur
 	local heading missing unref strings pot_changed pot_last number kind sha issues ref title
+	local calls pot_commit late c
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--since) since="$2"; shift 2 ;;
@@ -522,14 +546,27 @@ EOF
 		fi
 	fi
 
-	# 5. translation strings added since the previous tag vs the .pot
-	strings="$(git diff "$since..$remote/$branch" -- '*.php' '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null \
-		| grep -cE "^\+.*[^A-Za-z0-9_](__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\([[:space:]]*['\"]" || true)"
+	# 5. translation strings added since the previous tag vs the .pot, both read at HEAD: on a
+	#    release branch the POT regen is a commit of that branch and not yet of the default
+	#    branch (jp4wc-pro 3.2.0 was warned "no .pot change" right after its regen commit)
+	calls="(__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\\([[:space:]]*['\"]"
+	strings="$(git diff "$since..HEAD" -- '*.php' '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null \
+		| grep -cE "^\+.*[^A-Za-z0-9_]$calls" || true)"
 	if [ "${strings:-0}" -gt 0 ]; then
-		pot_changed="$(git diff --name-only "$since..$remote/$branch" -- '*.pot' 2>/dev/null | head -1 || true)"
+		pot_changed="$(git diff --name-only "$since..HEAD" -- '*.pot' 2>/dev/null | head -1 || true)"
 		if [ -n "$pot_changed" ]; then
-			pot_last="$(git log -1 --format='%h %cs' "$remote/$branch" -- "$pot_changed")"
-			echo "WARN     $strings added line(s) with translation calls since $since; $pot_changed last changed in $pot_last — confirm the POT covers the later ones"
+			pot_commit="$(git log -1 --format=%H HEAD -- "$pot_changed")"
+			pot_last="$(git log -1 --format='%h %cs' "$pot_commit")"
+			# commits that changed translation calls and are not in the history of the regen
+			late=""
+			for c in $(git log --format=%H -G"(^|[^A-Za-z0-9_])$calls" "$since..HEAD" -- '*.php' '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null); do
+				git merge-base --is-ancestor "$c" "$pot_commit" || late="$late ${c:0:7}"
+			done
+			if [ -z "$late" ]; then
+				echo "OK       $strings added line(s) with translation calls since $since; $pot_changed was regenerated after all of them ($pot_last)"
+			else
+				echo "WARN     translation calls changed after $pot_changed was last regenerated ($pot_last):$late — regenerate the POT"
+			fi
 		else
 			echo "WARN     $strings added line(s) with translation calls since $since and no .pot change — a POT regen is probably needed"
 		fi

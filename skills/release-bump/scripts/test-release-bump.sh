@@ -42,6 +42,7 @@ define( 'MP_VERSION', '1.2.3' );
  * @since 1.2.3
  */
 function mp_boot() {}
+new WC_AM_Client_2_12_2( __FILE__, null, 188, '1.2.3', 'plugin', 'https://example.com/', 'My Plugin', 'mp' );
 EOF
 cat > readme.txt <<'EOF'
 === My Plugin ===
@@ -91,17 +92,26 @@ cat > package-lock.json <<'EOF'
   }
 }
 EOF
-printf -- '- **Version**: 1.2.3 | **PHP**: 8.3+\n' > CLAUDE.md
+printf -- '- **Version**: 1.2.3 | **PHP**: 8.3+\n- Delivery meta is stored as entered since 1.2.3 (pitfall, must stay)\n- 現バージョン: 1.2.3\n- 1.2.3 までの版は手数料が 0 円になっていた（落とし穴、残す）\n' > CLAUDE.md
 mkdir -p docs includes tests i18n .github/workflows
 printf 'Shipped in 1.2.3.\nVersion 1.2.30 is unrelated and 11.2.3 too.\n' > docs/notes.md
 cat > includes/class-foo.php <<'EOF'
 <?php
 /**
  * @since 1.2.3
+ * @version 1.2.3
  */
 class MP_Foo {
 	const VERSION = '1.2.3';
 }
+EOF
+# a class with its own @version that happens to equal the release: not a carrier
+cat > includes/class-baz.php <<'EOF'
+<?php
+/**
+ * @version 1.2.3
+ */
+class MP_Baz {}
 EOF
 printf '<?php\n$this->assertSame( "1.2.3", MP_VERSION );\n' > tests/test-x.php
 printf '"Project-Id-Version: My Plugin 1.2.3\\n"\n' > i18n/my-plugin.pot
@@ -169,9 +179,14 @@ has '^PLUGIN_FILE=my-plugin.php$'; check "finds the main plugin file by its head
 has '^VERSION=1\.2\.3$'; check "reads the current version" $?
 has '^PREVIOUS_TAG=1\.2\.3$'; check "unprefixed tag beats v1.2.3 and v1.2.2" $?
 has '^REMOTE=upstream$' && has '^DEFAULT_BRANCH=main$'; check "canonical remote is upstream, default branch main" $?
-[ "$(printf '%s\n' "$OUT" | grep -c '^CARRIER')" -eq 6 ]; check "6 carriers (header, define, const, Stable tag, package.json, CLAUDE.md)" $?
-has "^CARRIER${TAB}my-plugin.php${TAB}4${TAB}" && has "^CARRIER${TAB}my-plugin.php${TAB}6${TAB}"; check "both lines of the plugin file are carriers" $?
-has "^CARRIER${TAB}includes/class-foo.php${TAB}6${TAB}"; check "class constant is a carrier" $?
+[ "$(printf '%s\n' "$OUT" | grep -c '^CARRIER')" -eq 9 ]; check "9 carriers (header, define, WC_AM_Client, @version, const, Stable tag, package.json, CLAUDE.md x2)" $?
+has "^CARRIER${TAB}my-plugin.php${TAB}4${TAB}" && has "^CARRIER${TAB}my-plugin.php${TAB}6${TAB}"; check "header and define of the plugin file are carriers" $?
+has "^CARRIER${TAB}my-plugin.php${TAB}14${TAB}new WC_AM_Client"; check "the WC_AM_Client version argument is a carrier" $?
+has "^CARRIER${TAB}includes/class-foo.php${TAB}7${TAB}"; check "class constant is a carrier" $?
+has "^CARRIER${TAB}includes/class-foo.php${TAB}4${TAB} \* @version 1\.2\.3$"; check "@version in a file that holds a carrier is a carrier" $?
+! has "class-baz"; check "@version in a file without a carrier is not listed" $?
+has "^CARRIER${TAB}CLAUDE.md${TAB}1${TAB}" && has "^MENTION${TAB}CLAUDE.md${TAB}2${TAB}"; check "CLAUDE.md: the Version line is a carrier, a 'since x.y.z' pitfall is a mention" $?
+has "^CARRIER${TAB}CLAUDE.md${TAB}3${TAB}- 現バージョン" && has "^MENTION${TAB}CLAUDE.md${TAB}4${TAB}"; check "CLAUDE.md: '現バージョン: x.y.z' is a carrier, Japanese prose a mention" $?
 has "^MENTION${TAB}docs/notes.md${TAB}1${TAB}" && has "^MENTION${TAB}tests/test-x.php${TAB}"; check "docs and tests only mention the version" $?
 has "^MENTION${TAB}my-plugin.php${TAB}9${TAB}"; check "prose in the plugin file is a mention, not a carrier" $?
 ! has '@since'; check "@since lines are not listed" $?
@@ -207,10 +222,13 @@ grep -q '^ \* Version: 1.3.0$' my-plugin.php && grep -q "define( 'MP_VERSION', '
 grep -q '@since 1.2.3' my-plugin.php && grep -q '@since 1.2.3' includes/class-foo.php; check "@since docblocks untouched" $?
 grep -q 'Shipped in the 1.2.3 cycle' my-plugin.php; check "prose mention in the plugin file untouched" $?
 grep -q "const VERSION = '1.3.0';" includes/class-foo.php; check "class constant bumped" $?
+grep -q "188, '1.3.0', 'plugin'" my-plugin.php; check "WC_AM_Client version argument bumped" $?
+grep -q '^ \* @version 1.3.0$' includes/class-foo.php && grep -q '^ \* @version 1.2.3$' includes/class-baz.php; check "@version bumped next to the class constant, a class's own @version untouched" $?
 grep -q '^Stable tag: 1.3.0$' readme.txt; check "Stable tag bumped" $?
 grep -q '"version": "1.3.0"' package.json; check "package.json bumped (via npm)" $?
 [ "$(grep -c '"version": "1.3.0"' package-lock.json)" -eq 2 ] && grep -q '"version": "1.2.3"' package-lock.json; check "package-lock.json: root and packages[\"\"] bumped, dependency version untouched" $?
-grep -q 'Version\*\*: 1.3.0' CLAUDE.md; check "CLAUDE.md bumped" $?
+grep -q 'Version\*\*: 1.3.0' CLAUDE.md && grep -q 'since 1.2.3 (pitfall' CLAUDE.md; check "CLAUDE.md: version line bumped, pitfall prose untouched" $?
+grep -q '^- 現バージョン: 1.3.0$' CLAUDE.md && grep -q '^- 1.2.3 までの版' CLAUDE.md; check "CLAUDE.md: '現バージョン' bumped, Japanese prose untouched" $?
 grep -q 'Shipped in 1.2.3' docs/notes.md && grep -q '"1.2.3"' tests/test-x.php; check "docs and tests untouched" $?
 grep -q '1.2.3' i18n/my-plugin.pot; check ".pot untouched" $?
 EXPECT="$(cat <<'EOF'
@@ -225,7 +243,7 @@ EOF
 )"
 [ "$(awk '/^== Changelog ==/{f=1} f' readme.txt | head -7)" = "$EXPECT" ]; check "changelog heading, entries and blank lines are exactly right" $?
 grep -q '^= 1.2.3 =$' readme.txt && grep -q 'Nothing special' readme.txt; check "Upgrade Notice untouched" $?
-git diff --quiet -- docs tests i18n; check "no other file changed" $?
+git diff --quiet -- docs tests i18n includes/class-baz.php; check "no other file changed" $?
 run bump 1.3.0 --allow-dirty
 [ "$RC" -ne 0 ] && has 'already at 1.3.0'; check "refuses to bump to the current version" $?
 git checkout -q -- . && printf '\n= 1.4.0 - 2026-03-01 =\n' > "$W/x"
@@ -301,10 +319,21 @@ git add -A && git commit -q -m "chore: bump version to 1.3.0 and add changelog"
 git push -q -u upstream release/1.3.0 2>/dev/null
 run check
 [ "$RC" -eq 0 ]; check "check passes on a complete release branch" $?
-has '^OK +carriers: 6 lines' && has '^OK +heading: = 1\.3\.0 - 2026-02-01 ='; check "carriers and heading reported OK" $?
+has '^OK +carriers: 9 lines' && has '^OK +heading: = 1\.3\.0 - 2026-02-01 ='; check "carriers and heading reported OK" $?
 has '^OK +every code PR'; check "every code PR referenced" $?
 has '^OK +up to date'; check "not behind upstream/main" $?
 has '^WARN +1 added line\(s\) with translation calls.*POT regen'; check "translation call added without a .pot change is flagged" $?
+# the POT is regenerated on the release branch, before main has it
+printf '"Project-Id-Version: My Plugin 1.3.0\\n"\nmsgid "New string"\n' > i18n/my-plugin.pot
+git add -A && git commit -q -m "chore: regenerate the POT"
+run check
+[ "$RC" -eq 0 ] && has '^OK +1 added line\(s\) with translation calls.*regenerated after all of them'; check "a POT regen on the release branch (not yet on main) clears the warning" $?
+printf "<?php\n// __( 'Later string', 'mp' );\n" > includes/class-qux.php
+git add -A && git commit -q -m "feat: later string"
+LATE="$(git rev-parse --short=7 HEAD)"
+run check
+has "^WARN +translation calls changed after i18n/my-plugin.pot was last regenerated .*: ${LATE} "; check "a translation change after the regen is named by its commit" $?
+git reset -q --hard HEAD~1
 run prs
 has "^10${TAB}code${TAB}[0-9a-f]{7}${TAB}7${TAB}yes${TAB}"; check "prs reads the changelog from the single release/* branch on upstream by default" $?
 

@@ -29,7 +29,7 @@ argument-hint: "start <x.y.z> [YYYY-MM-DD] | add [<PR#>...] | check | sync | tag
 | リリースブランチ | ブランチ命名 | `release/<x.y.z>` |
 | タグの形式 | `v` の有無 | **`v` 無し**（`scripts/release-bump.sh detect` が前タグの形式を報告する。デプロイ workflow が readme.txt の `= <TAG> ` 見出しから Release 本文を抜く構成では `v` を付けると本文が空になる） |
 | changelog の書式 | readme.txt の既存エントリ | 直前 2 リリースのエントリから写す（例: `* **Added/Fixed/Changed/Security** - ...`、英語、末尾に `(#<issue or PR>)`） |
-| 版数を持つファイル | 版数の書き換え対象 | `detect` の CARRIER 行（プラグインヘッダー `Version:`、`define( '<PREFIX>_VERSION' )`、クラス定数、readme.txt `Stable tag:`、package.json、CLAUDE.md） |
+| 版数を持つファイル | 版数の書き換え対象 | `detect` の CARRIER 行（プラグインヘッダー `Version:`、`define( '<PREFIX>_VERSION' )`、クラス定数・`$version`、それと同じファイルの docblock `@version`、`WC_AM_Client_*( ... )` の版数引数、readme.txt `Stable tag:`、package.json、CLAUDE.md の版数宣言 `Version:` / `バージョン:`） |
 | 本流リモート | フォーク運用か | `upstream` があれば upstream、無ければ origin（`detect` の REMOTE） |
 | POT 再生成 | i18n の手順 | `npm run make-pot` / `make-json`（wp-env 必須なら起動して行う） |
 | タグ前の全マトリクス | タグ push の前に走らせるテスト | デプロイ workflow 自身が全マトリクスを回すなら不要。回さないなら `gh workflow run <testing.yml> -f scope=full` を main で先に回す |
@@ -71,7 +71,9 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 ```
 
 - `detect` は現行版数を含む行を全部見て、**書き換えるべき行（CARRIER）とそうでない行（MENTION）に分ける**。
-  `@since x.y.z` の docblock と readme.txt の changelog 見出しは履歴なので対象外（一覧にも出ない）。MENTION に
+  `@since x.y.z` の docblock と readme.txt の changelog 見出しは履歴なので対象外（一覧にも出ない）。docblock の
+  `@version x.y.z` は、同じファイルに別の CARRIER（プラグインヘッダーやメインクラスの `$version`）があるときだけ CARRIER。
+  それ以外のファイルではクラス自身の版数がたまたま同じなだけなので一覧に出ない。MENTION に
   本当は書き換えるべき行があれば報告し、スクリプトの判定を直す（手で書き換えてごまかさない）
 - `prs` は `gh pr list --state merged` を前タグの日付以降で取り、**merge commit が前タグに含まれず main に含まれる**
   ものだけ残す（PR 番号の大小やマージ日時では判定しない。マージ日時がタグ後でもタグに含まれる PR がある）。
@@ -83,7 +85,7 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 - `tag` は「`v` 無し」「作業ツリーがクリーン」「default ブランチ上で HEAD = 本流の先端」「プラグインヘッダー・
   `Stable tag` が <ver>」「changelog 見出しがある」「タグが未存在」をすべて検査し、**本流リモート以外への push を拒む**
   （フォークには SVN の secrets が無く、失敗 run が残るだけ）
-- bash 3.2 / BSD awk で動く。`bash scripts/test-release-bump.sh` でシナリオテスト（77 件）
+- bash 3.2 / BSD awk で動く。`bash scripts/test-release-bump.sh` でシナリオテスト（87 件）
 
 ## モード
 
@@ -145,7 +147,7 @@ release ブランチの worktree（または release ブランチ上）で `chec
 | `MISSING heading` | changelog の見出しが無い | `bump` をやり直すか見出しを手で足す |
 | `MISSING code PRs without a changelog reference` | 載っていない PR | 読んで、本当に無ければ `add`、番号無しで載っていれば `--skip` |
 | `BEHIND n` | main が先に進んでいる | `sync` |
-| `WARN translation calls` | 前タグ以降に翻訳文字列が増えた | `.pot` の最終変更がそれより後か確認。前なら POT 再生成（別コミット） |
+| `WARN translation calls` | 前タグ以降に翻訳呼び出しが増えたのに、HEAD の `.pot` が変わっていない、または作り直した後に翻訳呼び出しを変えたコミットがある（sha を列挙） | POT 再生成（別コミット）。作り直し済みで全コミットがその前なら `OK` になる。判定は HEAD（release ブランチ）で行うので、main にまだ無い再生成コミットも数える |
 | `WARN heading` | 見出しが `= x.y.z - YYYY-MM-DD =` の形でない | デプロイ workflow の抽出に合わせて直す |
 
 `DONE` で exit 0 なら「マージできる状態」。マージは人間が行う（`gh pr merge` を代行しない）。

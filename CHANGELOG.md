@@ -24,7 +24,9 @@
   `scripts/release-bump.sh` が機械的な部分を担う: 現行版数を持つ行を「書き換える行（保存先）」と「触らない行（言及）」に分類し、
   `@since` docblock と changelog 見出しは対象外、`npm version --ignore-scripts` で package.json / package-lock.json、
   `gh pr list` の `mergeCommit` を前タグとの祖先関係で絞り込んで changelog の `#<PR>` / `#<issue>` 参照と突き合わせる。
-  シナリオテスト 77 件（`scripts/test-release-bump.sh`、bash 3.2 / BSD awk で動く）。
+  シナリオテスト 78 件（`scripts/test-release-bump.sh`、bash 3.2 / BSD awk で動く）。初回の実運用（JP4WC #229 への
+  `add 230`）で、`CLAUDE.md` の版数を含む行をすべて保存先と見ていたため「since 2.9.17」という落とし穴の文まで
+  次の bump で書き換わるところだった不具合を見つけ、`Version:` の宣言行だけに絞った。
   背景: Japanized-for-WooCommerce 2.9.17 の bump PR #229 を開いた後に #228・#230 がマージされ、changelog 行を 2 回とも手で
   追記することになった（post-merge の手順 6 で提案 → ユーザー指示で実装）。2026-07-08 に提案した `/release-bump` と統合。
 - `ssm-provider`: 新規。Signal Mail for WooCommerce（`saai-signal-mail`）の配信プロバイダを実装・レビューする手順。
@@ -146,6 +148,19 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `release-bump`: `detect` の判定漏れ 3 種と、`check` の POT 判定の誤りを直した。jp4wc-pro 3.2.0 の bump（PR #13）で
+  CLAUDE.md の「現バージョン: x.y.z」、`new WC_AM_Client_2_12_2( __FILE__, null, 188, 'x.y.z', ... )` の版数引数、メインクラスの
+  docblock `@version x.y.z` が MENTION（または一覧外）になり、手で書き換えた。`@version` は Copilot の指摘で気づいて直したが、
+  その修正は PR のマージ後に push したため取り込まれず、追補 PR #14 が要った。
+  CLAUDE.md は `バージョン:` / `バージョン：` の宣言行も CARRIER にした。`WC_AM_Client*(` の呼び出し行では、
+  引用符で囲んだ版数を CARRIER にした。`@version` は、同じ PHP ファイルに別の CARRIER（プラグインヘッダー、
+  `$version`、`VERSION` 定数）があるときだけ CARRIER にした。それ以外のファイルの `@version` は、クラス自身の版数が
+  たまたま同じなだけなので、これまでどおり一覧に出さない。
+  `check` の POT 判定は `<remote>/<default>` を見ていたため、release ブランチで POT を作り直しても
+  「no .pot change」と警告していた。HEAD で判定するようにし、作り直したコミットの後に翻訳呼び出しを変えたコミットが
+  なければ `OK`、あればその sha を `WARN` に並べる。手元の 31 リポジトリで修正前後の `detect` を比べ、変わったのは
+  jp4wc-pro の 3 行、wc4jp-gmo-pg（2 チェックアウト）の `WC_AM_Client` 行、Paygent の `class-wc-gateway-paygent.php`
+  の `@version`（毎リリース一緒に上げてきた行）だけだった。シナリオテスト 87 件（新しい 10 件は修正前のスクリプトで失敗）。
 - `woo-marketplace-submission` / `woo-marketplace-extension`: `changelog.txt` の例の見出しが WordPress.org の readme.txt 風
   （`= 1.0.0 - 2026-06-01 =`）になっていた。WooCommerce.com の公式書式は `YYYY-MM-DD - version x.y.z`（日付が先）で、
   書式違いは「The `changelog.txt` file provided does not match the expected format」としてアップロード拒否の理由になる。
