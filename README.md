@@ -157,6 +157,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`wp-i18n`](skills/wp-i18n/SKILL.md) | Use when setting up internationalization (i18n/l10n) for WordPress plugins or themes: te… |
 | [`wp-org-release`](skills/wp-org-release/SKILL.md) | Use when publishing or releasing a WordPress plugin to the WordPress.org plugin director… |
 | [`release-bump`](skills/release-bump/SKILL.md) | タグ push で wp.org へ自動デプロイするプラグインの「バージョン bump PR → 後から入った fix PR の changelog 追記 → マージ前チェック → タグ push」。`@since` を巻き込まない版数の書き換え、前タグ以降の PR と changelog の突き合わせ、タグを本流だけに push。モノレポ（`plugins/<slug>/`）と接頭辞付きのタグ（`v`・`pro-v`）にも対応… |
+| [`wporg-screenshots`](skills/wporg-screenshots/SKILL.md) | wordpress.org の readme 用スクリーンショット（`.wordpress-org/screenshot-N.png`）を wp-env の tests サイトで Playwright を使って撮り直す。readme のキャプションと枚数を照合し、外部 API のモック・データの準備・片付けはプロジェクトの `.claude/wporg-screenshots/` のフックに任せる… |
 
 ### 開発ワークフロー
 

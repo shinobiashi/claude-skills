@@ -5,6 +5,22 @@
 ## [Unreleased]
 
 ### Added
+- `wporg-screenshots`: 新規。wordpress.org の readme に載せるスクリーンショットを、wp-env の tests サイトで Playwright（ヘッドレスの
+  Chrome）を使って撮り直す。`scripts/capture.sh`（`shoot` / `status` / `cleanup`）が、readme の `== Screenshots ==` のキャプションと枚数を
+  照合し、build → tests サイトの準備 → 撮影 → 片付けを行う。撮る画面はプロジェクトの `.claude/wporg-screenshots/shots.json` に書く
+  （`scripts/config.cjs` が検証し、知らないキーも誤りにする）。外部 API のモック・データの準備・片付けは、同じディレクトリの任意のフック
+  （`mu-plugin.php`・`setup.php`・`teardown.php`）が行う。フックは tests サイトの `mu-plugins/wporg-screenshots-hooks/`（`.htaccess` で HTTP は 403）へ
+  写して `wp eval-file` で実行するので、wp-env のマウントに依存しない。mu-plugin は目印つきの包みから読み込む。終わるとき（失敗・中断も）は
+  teardown を走らせてからモックを外し、teardown が失敗したら全部残して止まる（setup が残したもので本物の API へ出ないように）。
+  ログイン Cookie は capture.sh が作り、一時ディレクトリだけに置く。setup が出す `KEY=value` は、`shots.json` の `{KEY}`（パス・localStorage）に入る。
+  一時ディレクトリに全部撮れてから出力先へ写し、余った番号・別の形式の画像は警告だけする。`plugin_dir` でモノレポ、`format` で jpg にも対応した。
+  シナリオテスト 53 件（`scripts/test-capture.sh`。偽の `npx`〔wp-env〕・`curl`・撮影で、順序・片付け・拒否を確かめる。wp-env もブラウザも要らない）。
+  macOS の bash 3.2 と Ubuntu の bash 5.2・Node 18 で pass。ガード 13 個は、それぞれ壊すと名指しのテストが落ちることを確かめた。
+  そのうち 2 つは初めは検出できなかったので、テストを強めた（作業の残りがあるときに何も実行しないこと、フックの `.htaccess`）。
+  cart-bridge-jp の設定（Pro を無効にし、Color Me Shop API をフィクスチャへ向けるモック・偽のトークン・dry-run の準備）で 5 画面を撮った。
+  移す前のプロジェクトスキルで同じ時点に撮った画像と、5 枚ともバイト単位で同じだった。
+  背景: cart-bridge-jp のプロジェクトスキル（PR #112）を、どのプラグインでも使える部分と、プラグインごとの設定・フックに分けた
+  （wordpress.org 用のスクリーンショットを持つ手元のリポジトリは 6 つ。ユーザー指示）。
 - `todo-progress`: 新規。TODO.md などのチェックリストを節（`## `）ごとに数え、`--check` でファイル先頭の進捗サマリーの表
   （「完了 / 全体」「割合%」）と照らす `scripts/todo-progress.sh`。表のラベルは節の見出しか見出しの先頭（「Phase 1」は
   「Phase 10 — …」に当てない）で、太字・リンク・3 桁区切りを許す。ずれた行・表に行の無い節・合計の行の欠けで exit 1、
