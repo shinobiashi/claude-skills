@@ -391,6 +391,182 @@ git tag -d 1.3.0 >/dev/null
 run tag 1.3.0
 [ "$RC" -ne 0 ] && has 'already exists' && [ -n "$(git tag --list 1.3.0)" ]; check "a tag deleted locally is fetched back from the remote and refused" $?
 
+# ---- monorepo: plugins/<slug>/ ------------------------------------------
+# Two plugins at the same version (free with a readme without dates, pro
+# without a readme), root tooling at that version too, v* and pro-v* tags.
+echo "== monorepo"
+git init -q --bare "$W/mono-up.git"
+git clone -q "$W/mono-up.git" "$W/mono" 2>/dev/null
+cd "$W/mono"
+git config user.email t@example.com
+git config user.name tester
+git checkout -q -b main
+mkdir -p plugins/free/includes plugins/free/languages plugins/pro bin tools/mu .claude/skills
+cat > plugins/free/free.php <<'EOF'
+<?php
+/**
+ * Plugin Name: Free
+ * Version: 1.2.3
+ */
+define( 'FREE_VERSION', '1.2.3' );
+
+/**
+ * @since 1.2.3
+ */
+function free_boot() {}
+EOF
+cat > plugins/free/readme.txt <<'EOF'
+=== Free ===
+Stable tag: 1.2.3
+
+== Changelog ==
+
+= 1.2.3 =
+* Old entry.
+
+== Upgrade Notice ==
+
+= 1.2.3 =
+Nothing.
+EOF
+printf '{\n  "name": "free",\n  "version": "1.2.3"\n}\n' > plugins/free/package.json
+printf '"Project-Id-Version: Free 1.2.3\\n"\n' > plugins/free/languages/free.pot
+printf '<?php\n// free code\n' > plugins/free/includes/class-a.php
+cat > plugins/pro/pro.php <<'EOF'
+<?php
+/**
+ * Plugin Name: Pro
+ * Version: 1.2.3
+ */
+define( 'PRO_VERSION', '1.2.3' );
+EOF
+printf '{\n  "name": "dev-tools",\n  "version": "1.2.3"\n}\n' > package.json
+printf -- '- Version: 1.2.3\n' > CLAUDE.md
+printf '#!/bin/sh\n' > bin/tool.sh
+# plugins that are not release candidates: no readme, or under a dot directory
+printf '<?php\n/**\n * Plugin Name: MU helper\n */\n' > tools/mu/mu.php
+printf '<?php\n/**\n * Plugin Name: Template\n */\n' > .claude/skills/template.php
+printf '=== Template ===\n' > .claude/skills/readme.txt
+git add -A && git commit -q -m init
+git tag v1.2.3
+git tag pro-v1.2.3
+git tag pro-v1.2.9
+git push -q -u origin main --tags 2>/dev/null
+git remote set-head origin main
+
+run detect
+[ "$RC" -eq 0 ] && has '^PLUGIN_FILE=plugins/free/free\.php$' && has '^PLUGIN_DIR=plugins/free$' && has '^README=plugins/free/readme\.txt$'; check "monorepo: detect finds the one plugins/<slug>/ with a readme.txt" $?
+[ "$(printf '%s\n' "$OUT" | grep -c '^CARRIER')" -eq 4 ] && [ -z "$(printf '%s\n' "$OUT" | grep '^CARRIER' | grep -v "${TAB}plugins/free/")" ]; check "monorepo: 4 carriers, all in plugins/free (header, define, Stable tag, its package.json)" $?
+has "^MENTION${TAB}package.json${TAB}3${TAB}" && has "^MENTION${TAB}CLAUDE.md${TAB}1${TAB}"; check "monorepo: the root package.json and CLAUDE.md are only mentions" $?
+! has 'plugins/pro'; check "monorepo: the other plugin at the same version is not listed" $?
+has '^HEADING_STYLE=bare$'; check "a readme whose headings have no date: bare style" $?
+has '^PREVIOUS_TAG=v1\.2\.3$' && has '^WARN=.*--tag-prefix v'; check "no prefix: v1.2.3 is the previous tag (pro-v* ignored), with a warning" $?
+run detect --tag-prefix v --version 1.3.0
+has '^PREVIOUS_TAG=v1\.2\.3$' && has '^TAG_PREFIX=v$' && has '^NEW_TAG=v1\.3\.0$' && ! has '^WARN='; check "--tag-prefix v: previous tag, new tag, no warning" $?
+run detect --plugin plugins/pro --tag-prefix pro-v
+has '^PLUGIN_FILE=plugins/pro/pro\.php$' && has '^PREVIOUS_TAG=pro-v1\.2\.9$' && has '^README=plugins/pro/readme\.txt \(missing\)$' && has "^CARRIER${TAB}plugins/pro/pro.php${TAB}6${TAB}" && ! has 'plugins/free'; check "--plugin selects the other plugin; --tag-prefix pro-v picks pro-v1.2.9" $?
+printf '=== Pro ===\nStable tag: 1.2.3\n' > plugins/pro/readme.txt
+run detect
+[ "$RC" -ne 0 ] && has 'more than one plugin directory' && has 'plugins/free plugins/pro'; check "two plugin directories with a readme are refused without --plugin" $?
+run detect --plugin plugins/free/
+[ "$RC" -eq 0 ] && has '^PLUGIN_FILE=plugins/free/free\.php$'; check "--plugin with a trailing slash" $?
+OUT="$(RELEASE_BUMP_PLUGIN_DIR=./plugins/free "$SCRIPT" detect 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] && has '^PLUGIN_FILE=plugins/free/free\.php$'; check "RELEASE_BUMP_PLUGIN_DIR=./plugins/free" $?
+run "--plugin=$W/mono/plugins/free" detect
+[ "$RC" -eq 0 ] && has '^PLUGIN_DIR=plugins/free$'; check "an absolute --plugin= before the subcommand" $?
+rm plugins/pro/readme.txt
+run detect --plugin plugins/none
+[ "$RC" -ne 0 ] && has 'no directory plugins/none'; check "a missing --plugin directory is refused" $?
+run detect --plugin ../mono
+[ "$RC" -ne 0 ] && has 'without \. or \.\. parts'; check "a --plugin path with .. is refused" $?
+run detect --plugin bin
+[ "$RC" -ne 0 ] && has "no \*\.php with a 'Plugin Name:' header in bin"; check "a --plugin directory without a plugin file is refused" $?
+
+printf '* Fixed the thing (#20)\n' > "$W/m-entries.md"
+run bump 1.3.0 --date 2026-02-01 --entries "$W/m-entries.md"
+[ "$RC" -eq 0 ] && has '^NOTE .*have no date'; check "monorepo bump succeeds; --date is not written into a readme without dates" $?
+grep -q '^ \* Version: 1.3.0$' plugins/free/free.php && grep -q "define( 'FREE_VERSION', '1.3.0' );" plugins/free/free.php && grep -q '@since 1.2.3' plugins/free/free.php; check "monorepo: header and constant bumped, @since untouched" $?
+grep -q '^Stable tag: 1.3.0$' plugins/free/readme.txt && grep -q '"version": "1.3.0"' plugins/free/package.json; check "monorepo: Stable tag and the plugin's package.json (npm in its directory) bumped" $?
+grep -q '^ \* Version: 1.2.3$' plugins/pro/pro.php && grep -q "define( 'PRO_VERSION', '1.2.3' );" plugins/pro/pro.php; check "monorepo: the other plugin is untouched" $?
+grep -q '"version": "1.2.3"' package.json && grep -q 'Version: 1.2.3' CLAUDE.md; check "monorepo: the root package.json and CLAUDE.md are untouched" $?
+EXPECT="$(cat <<'EOF'
+== Changelog ==
+
+= 1.3.0 =
+* Fixed the thing (#20)
+
+= 1.2.3 =
+EOF
+)"
+[ "$(awk '/^== Changelog ==/{f=1} f' plugins/free/readme.txt | head -6)" = "$EXPECT" ]; check "a heading without a date, entries and blank lines are exactly right" $?
+git checkout -q -- .
+
+merge_pr 20 f20 plugins/free/includes/class-a.php "// fix"; M20="$SHA"
+merge_pr 21 f21 plugins/pro/pro.php "// __( 'Pro string', 'pro' );"; M21="$SHA"
+merge_pr 22 f22 bin/tool.sh "echo hi"; M22="$SHA"
+merge_pr 23 f23 plugins/free/docs/notes.md "Notes."; M23="$SHA"
+git checkout -q -b f24 main
+printf '<?php\n// both\n' > plugins/free/includes/class-b.php && printf 'echo both\n' >> bin/tool.sh
+git add -A && git commit -q -m "f24 change" && git checkout -q main
+git merge -q --no-ff -m "Merge pull request #24 from x/f24" f24
+M24="$(git rev-parse HEAD)"
+git push -q origin main 2>/dev/null
+export FAKE_PRS="20${TAB}${M20}${TAB}-${TAB}fix: free${TAB}plugins/free/includes/class-a.php
+21${TAB}${M21}${TAB}-${TAB}feat: pro${TAB}plugins/pro/pro.php
+22${TAB}${M22}${TAB}-${TAB}chore: tool${TAB}bin/tool.sh
+23${TAB}${M23}${TAB}-${TAB}docs: free notes${TAB}plugins/free/docs/notes.md
+24${TAB}${M24}${TAB}-${TAB}fix: both${TAB}bin/tool.sh plugins/free/includes/class-b.php
+"
+export RELEASE_BUMP_TAG_PREFIX=v
+run prs
+[ "$RC" -eq 0 ] && has "^20${TAB}code${TAB}" && has "^24${TAB}code${TAB}" && has "^23${TAB}docs${TAB}"; check "monorepo prs: a PR with a file in the plugin is code (or docs), whatever else it touches" $?
+has "^21${TAB}outside${TAB}" && has "^22${TAB}outside${TAB}"; check "monorepo prs: the other plugin's and the tooling's PRs are outside" $?
+
+git checkout -q -b release/1.3.0 main
+"$SCRIPT" bump 1.3.0 --entries "$W/m-entries.md" >/dev/null
+git add -A && git commit -q -m "chore: bump version to 1.3.0 and add changelog"
+git push -q -u origin release/1.3.0 2>/dev/null
+run check
+[ "$RC" -ne 0 ] && has '^MISSING +code PRs without a changelog reference: #24$' && ! has '#2[123] '; check "monorepo check: only the plugin's unreferenced code PR is missing" $?
+has '^OK +heading: = 1\.3\.0 =$' && has '^OK +carriers: 4 lines'; check "monorepo check: a heading without a date is OK, 4 carriers" $?
+has '^OK +no translation calls added'; check "monorepo check: a translation call in the other plugin does not ask for this plugin's POT" $?
+printf '* Fixed both (#24)\n' > "$W/m24.md"
+"$SCRIPT" add-entries "$W/m24.md" >/dev/null
+[ "$(awk '/^= 1.3.0 =/{f=1} f' plugins/free/readme.txt | sed -n '3p')" = '* Fixed both (#24)' ]; check "monorepo add-entries writes into the plugin's readme" $?
+git add -A && git commit -q -m "chore: add the 1.3.0 changelog entry for #24"
+printf "<?php\n// __( 'Free string', 'free' );\n" > plugins/free/includes/class-c.php
+git add -A && git commit -q -m "feat: free string"
+run check
+has '^WARN +1 added line\(s\) with translation calls.*no \.pot change'; check "monorepo check: a translation call in the plugin asks for its POT" $?
+git reset -q --hard HEAD~1
+git push -q origin release/1.3.0 2>/dev/null
+run check
+[ "$RC" -eq 0 ]; check "monorepo check passes once the entry is in" $?
+
+git checkout -q main
+git merge -q --no-ff -m "Merge pull request #25 from x/release/1.3.0" release/1.3.0
+git push -q origin main 2>/dev/null
+run tag 1.3.0 --dry-run
+[ "$RC" -eq 0 ] && has '^tag: +v1\.3\.0 at .*plugins/free/free\.php 1\.3\.0'; check "monorepo tag --dry-run names v1.3.0" $?
+run tag 1.3.0 --tag-prefix 'bad prefix '
+[ "$RC" -ne 0 ] && has 'not a valid tag name'; check "an invalid tag prefix is refused" $?
+run tag 1.3.0
+[ "$RC" -eq 0 ] && [ -n "$(git ls-remote --tags origin refs/tags/v1.3.0)" ] && [ -z "$(git ls-remote --tags origin refs/tags/1.3.0)" ]; check "monorepo tag pushes v1.3.0, not 1.3.0" $?
+run tag 1.3.0
+[ "$RC" -ne 0 ] && has 'v1\.3\.0 already exists'; check "a second run is refused by the prefixed name" $?
+unset RELEASE_BUMP_TAG_PREFIX
+
+# ---- a plugin file git does not track yet --------------------------------
+echo "== untracked"
+git init -q "$W/fresh"
+cd "$W/fresh"
+printf '<?php\n/**\n * Plugin Name: Fresh\n * Version: 0.1.0\n */\n' > fresh.php
+printf '=== Fresh ===\nStable tag: 0.1.0\n\n== Changelog ==\n\n= 0.1.0 =\n* First.\n' > readme.txt
+run detect
+[ "$RC" -eq 0 ] && has '^WARN=fresh\.php is not tracked' && ! has '^CARRIER'; check "detect warns that an untracked plugin file has no carriers" $?
+run bump 0.2.0 --allow-dirty
+[ "$RC" -ne 0 ] && has "not among the carriers" && grep -q '^ \* Version: 0.1.0$' fresh.php && ! grep -q '0\.2\.0' readme.txt; check "bump refuses and writes nothing when the header is not a carrier" $?
+
 echo ""
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

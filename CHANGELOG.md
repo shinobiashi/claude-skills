@@ -258,6 +258,29 @@
   を明記した
 
 ### Changed
+- `release-bump`: プラグインがリポジトリ直下に無いモノレポと、接頭辞付きのタグに対応した。グローバルオプション
+  `--plugin <dir>`（env `RELEASE_BUMP_PLUGIN_DIR`）で、プラグインのディレクトリを指定する。省略すると直下を探し、無ければ
+  readme.txt とプラグインのファイルを持つ 1〜2 階層下のディレクトリが 1 つだけのときそこを使う（2 つ以上なら止まる）。
+  指定したディレクトリの中だけを、版数の書き換え・readme.txt・package.json（npm はそのディレクトリで実行）・POT の判定の
+  対象にする。ルート直下のファイルは MENTION として見せるだけで、ほかのディレクトリは探さない。PR は、そのディレクトリに
+  ファイルが 1 つも無ければ新しい種類 `outside` になる。
+  `--tag-prefix <p>`（env `RELEASE_BUMP_TAG_PREFIX`）を付けると、タグは `<p><x.y.z>` になり、前タグもその形だけから選ぶ
+  （無料版の `v*` と Pro の `pro-v*` を分ける）。既定は今までどおり接頭辞無し。
+  changelog の見出しは最新の見出しの形に合わせ、日付の無い readme（`= x.y.z =`）では日付を書かない。`check` もこの形を OK とする。
+  `bump` は、プラグインヘッダーの `Version:` 行が CARRIER に無ければ何も書かずに止まる。`git grep` は追跡しているファイルしか
+  読まないので、まだコミットしていないプラグインでは、版数を 1 つも書き換えずに changelog だけ足して DONE と出していた。
+  `detect` にも同じ警告を出した。相対パスで呼んだ `--help` は、スクリプトがリポジトリのルートへ移ってから自分を読むため
+  失敗していたので、移る前に自分の絶対パスを控えるようにした。シナリオテストは 122 件（モノレポ 33 件・未追跡 2 件を追加）で、macOS の bash 3.2 と
+  Ubuntu の bash 5.2・mawk で pass。新しいガード 12 個は、それぞれ壊すと名指しのテストが落ちることを確かめた。
+  手元の 50 リポジトリで修正前後の `detect` を比べた。直下にプラグインがある 30 件は、CARRIER・MENTION・前タグなどの行が同じだった。
+  旧版が止まっていた 20 件のうち、cart-bridge-jp は `plugins/cart-bridge-jp/` を見つけて通るようになった。batchbill-for-wc
+  （プラグインのファイルが未追跡）は exit 0 になり、上の警告が出る（`bump` は止まる）。saai-knowledge は 2 つのプラグインを
+  持つので `--plugin` を求める。残りの 17 件はプラグインのリポジトリではない。cart-bridge-jp では、1.0.1 の bump の前の
+  コミットで `bump` を流した。
+  プラグインのファイルと changelog の節は、手で書き換えた PR #146 の最初のコミットと同じになった（違いは手で足した
+  Upgrade Notice だけ）。
+  背景: cart-bridge-jp は無料版と Pro を `plugins/` の下に置くモノレポで、タグは `v*`（Pro は `pro-v*`）。1.0.1 を
+  手で bump した（post-merge の手順 6 で提案 → ユーザー指示で実装）。
 - `post-merge`: 手順 3 に「マージコミットの CI run が実行中のうちは `<default>` へ push しない」を追加し、手順 5 の push を
   その run の完了後にした。workflow の `concurrency` が `cancel-in-progress: true` で `group` が `github.ref` 単位だと、蒸留コミットの
   push がマージコミットの run を途中で cancel する（saai-signal-mail PR #6 で 10 ジョブ success のあと E2E だけ `cancelled`）。

@@ -10,25 +10,46 @@
 #
 # Subcommands (run from anywhere inside the plugin repository):
 #
+#   Global options, accepted before or after the subcommand:
+#     --plugin <dir>        the plugin directory, relative to the repository
+#                           root (env RELEASE_BUMP_PLUGIN_DIR). Default: the
+#                           root when a root *.php has a 'Plugin Name:'
+#                           header, else the one directory up to two levels
+#                           down (plugins/<slug>/, <slug>/) that holds such a
+#                           file and a readme.txt; more than one is refused.
+#                           In a plugin directory, version lines, readme.txt,
+#                           package.json, the .pot check and the PR kinds are
+#                           all read inside that directory.
+#     --tag-prefix <p>      release tags are <p><x.y.z> (env
+#                           RELEASE_BUMP_TAG_PREFIX), e.g. v or pro-v when the
+#                           deploy workflow strips it. Default: none.
+#
 #   detect [--version <new>]
 #       Print the repository facts the skill needs, one KEY=value per line:
-#       the main plugin file, the current version, the previous release tag,
-#       the default branch, the canonical remote (upstream when it exists,
-#       else origin), the GitHub repo, the release branch for <new>; then a
+#       the main plugin file and its directory, the readme, the current
+#       version, the tag prefix, the previous release tag, the changelog
+#       heading style, the default branch, the canonical remote (upstream
+#       when it exists, else origin), the GitHub repo, the release branch
+#       and tag for <new>; then a
 #       CARRIER line for every line that holds the version and is rewritten
 #       by `bump`, and a MENTION line for every other line that contains the
 #       version string and is left alone (docblock @since lines and changelog
 #       headings are history and are not even listed). A docblock @version is
 #       a carrier only in a PHP file that holds another carrier (the plugin
 #       header, or the main class $version); elsewhere it is a class's own
-#       version and is not listed either.
+#       version and is not listed either. With a plugin directory, only the
+#       files in it can be carriers; the repository root's own files (root
+#       package.json, CLAUDE.md) are listed as MENTION, and other directories
+#       (another plugin of the monorepo) are not searched.
 #
 #   prs [--since <tag>] [--changelog-ref <ref>] [--skip <n,n,...>]
 #       List the PRs merged into the default branch after <since> (default:
 #       the previous release tag), as TSV:
 #         number  kind  merge-sha  issues  referenced  title
 #       kind is docs when every changed file is documentation (docs/, *.md,
-#       .claude/), ci when every file is under .github/, else code.
+#       .claude/), ci when every file is under .github/, else code. With a
+#       plugin directory only its files count, and a PR that changes nothing
+#       in it is outside.
 #       referenced says whether the newest changelog block of readme.txt at
 #       <changelog-ref> (default: the release branch when exactly one exists
 #       on the canonical remote, else the working tree) mentions #<number> or
@@ -39,6 +60,8 @@
 #       package.json / package-lock.json through `npm version` when they
 #       exist, and insert the changelog heading `= <version> - <date> =`
 #       (date: today) with the bullets of <file> at the top of == Changelog ==.
+#       When the newest existing heading has no date (`= x.y.z =`), the new
+#       one has none either and --date is ignored.
 #       Refuses when the heading already exists or the tree is dirty.
 #
 #   add-entries <file> [--version <x.y.z>]
@@ -56,8 +79,9 @@
 #       Exit 1 when something needs attention.
 #
 #   tag <version> [--remote <name>] [--dry-run]
-#       Create the lightweight tag <version> at HEAD and push it to the
-#       canonical remote only (never to a fork). Refuses a `v` prefix, a dirty
+#       Create the lightweight tag <tag-prefix><version> at HEAD and push it
+#       to the canonical remote only (never to a fork). Refuses a `v` on
+#       <version> itself, a dirty
 #       tree, a HEAD that is not the remote's default branch tip, carriers
 #       that do not hold <version>, a missing changelog heading and a tag that
 #       already exists locally or on the remote.
@@ -65,7 +89,13 @@
 # Why these rules are baked in rather than typed each time:
 #   - A `v`-prefixed tag yields an empty GitHub Release body when the deploy
 #     workflow extracts the changelog with `awk /^= <TAG> /` against readme.txt
-#     (Japanized-for-WooCommerce v2.9.14 had to be edited by hand).
+#     (Japanized-for-WooCommerce v2.9.14 had to be edited by hand). A prefix
+#     is only added when it is asked for (--tag-prefix), for workflows that
+#     strip it (`${GITHUB_REF_NAME#v}`).
+#   - A monorepo (plugins/<free>/ and plugins/<pro>/) can hold two plugins
+#     at the same version: a repository-wide search would bump the other
+#     plugin's constant and count its PRs (cart-bridge-jp 1.0.1 was bumped by
+#     hand because the script only looked at the root).
 #   - The fork has the same deploy workflow but no SVN secrets; a tag pushed
 #     there only produces a failed run.
 #   - `@since x.y.z` docblocks hold the version a feature shipped in and must
@@ -74,7 +104,9 @@
 #     somebody notices (2.9.17: #228 and #230 were both added after the fact).
 set -euo pipefail
 
-usage() { sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# this file, absolute: the script cds to the repository root before usage runs
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+usage() { sed -n '2,/^set -euo pipefail$/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 die() { echo "release-bump: $*" >&2; exit 2; }
 
@@ -102,15 +134,103 @@ gh_repo() { # $1 = remote -> owner/repo
 		| sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##'
 }
 
-main_plugin_file() {
-	if [ -n "${RELEASE_BUMP_PLUGIN_FILE:-}" ]; then echo "$RELEASE_BUMP_PLUGIN_FILE"; return; fi
+# Set by the global options (or their environment variables) in main.
+PLUGIN_DIR_ARG="${RELEASE_BUMP_PLUGIN_DIR:-}"
+TAG_PREFIX="${RELEASE_BUMP_TAG_PREFIX:-}"
+# Set by resolve_plugin: the plugin directory ("" for the root, else "dir/"),
+# the main plugin file and the readme, all relative to the repository root.
+PDIR=""
+PLUGIN=""
+README="readme.txt"
+
+# The first *.php directly in $1 ("" or "dir/") with a Plugin Name header.
+plugin_file_in() {
 	local f
-	for f in *.php; do
+	for f in "$1"*.php; do
 		[ -f "$f" ] || continue
 		if grep -qE '^[[:space:]]*\*?[[:space:]]*Plugin Name:' "$f"; then echo "$f"; return; fi
 	done
 	return 1
 }
+
+# A directory argument as a path relative to the root without ./ or a
+# trailing slash ("" for the root). Refuses one that leaves the repository.
+normalize_dir() {
+	local d="$1" abs root
+	if [ "${d#/}" != "$d" ]; then
+		abs="$(cd "$d" 2>/dev/null && pwd -P)" || die "--plugin: no directory $1"
+		root="$(pwd -P)"
+		case "$abs" in
+			"$root") d="" ;;
+			"$root"/*) d="${abs#"$root"/}" ;;
+			*) die "--plugin: $1 is outside the repository" ;;
+		esac
+	fi
+	while [ "${d#./}" != "$d" ]; do d="${d#./}"; done
+	while [ "${d%/}" != "$d" ]; do d="${d%/}"; done
+	[ "$d" != . ] || d=""
+	case "/$d/" in */../*|*/./*) die "--plugin: $1 must be a path inside the repository without . or .. parts" ;; esac
+	printf '%s' "$d"
+}
+
+# Directories one or two levels down (plugins/<slug>, <slug>) that hold a
+# readme.txt and a *.php with a Plugin Name header. Dependencies, tests,
+# build output and dot directories (.claude/ skill templates are plugins
+# too) are not candidates.
+plugin_dir_candidates() {
+	git ls-files -- '*.php' \
+		| awk -F/ 'NF == 2 || NF == 3 { d = $1; for (i = 2; i < NF; i++) d = d "/" $i; print d }' \
+		| sort -u \
+		| { grep -vE '(^|/)(vendor|node_modules|tests?|dist|build)(/|$)|(^|/)\.' || true; } \
+		| while IFS= read -r d; do
+			[ -f "$d/readme.txt" ] || continue
+			plugin_file_in "$d/" >/dev/null || continue
+			echo "$d"
+		done
+}
+
+resolve_plugin() {
+	local d pd list n
+	if [ -n "${RELEASE_BUMP_PLUGIN_FILE:-}" ]; then
+		[ -f "$RELEASE_BUMP_PLUGIN_FILE" ] || die "RELEASE_BUMP_PLUGIN_FILE not found: $RELEASE_BUMP_PLUGIN_FILE"
+		PLUGIN="${RELEASE_BUMP_PLUGIN_FILE#./}"
+		d="$(dirname "$PLUGIN")"; [ "$d" != . ] || d=""
+		if [ -n "$PLUGIN_DIR_ARG" ]; then
+			pd="$(normalize_dir "$PLUGIN_DIR_ARG")"
+			[ "$pd" = "$d" ] || die "RELEASE_BUMP_PLUGIN_FILE ($PLUGIN) is not in --plugin $PLUGIN_DIR_ARG"
+		fi
+		PDIR="${d:+$d/}"
+	elif [ -n "$PLUGIN_DIR_ARG" ]; then
+		d="$(normalize_dir "$PLUGIN_DIR_ARG")"
+		[ -z "$d" ] || [ -d "$d" ] || die "--plugin: no directory $PLUGIN_DIR_ARG"
+		PDIR="${d:+$d/}"
+		PLUGIN="$(plugin_file_in "$PDIR")" || die "no *.php with a 'Plugin Name:' header in ${d:-the repository root}"
+	elif PLUGIN="$(plugin_file_in "")"; then
+		PDIR=""
+	else
+		list="$(plugin_dir_candidates)"
+		n="$(printf '%s\n' "$list" | grep -c . || true)"
+		case "$n" in
+			0) die "no root *.php with a 'Plugin Name:' header and no plugins/<slug>/ with one and a readme.txt (pass --plugin <dir>)" ;;
+			1) PDIR="$list/"; PLUGIN="$(plugin_file_in "$PDIR")" ;;
+			*) die "more than one plugin directory, pass --plugin <dir>: $(printf '%s' "$list" | tr '\n' ' ')" ;;
+		esac
+	fi
+	README="${PDIR}readme.txt"
+}
+
+# Prints "date" when the newest changelog heading is `= x.y.z - <date> =` (or
+# there is none yet) and "bare" when it is `= x.y.z =`: a new heading follows
+# the readme's own style (cart-bridge-jp writes no dates).
+heading_style() {
+	awk '/^== Changelog ==/ { f = 1; next }
+		f && /^= / { print ($0 ~ /^= [^ ]+ =[ \t]*$/) ? "bare" : "date"; done = 1; exit }
+		f && /^== / { exit }
+		END { if (!done) print "date" }' "$README"
+}
+
+# The release tag of a version (the prefix is only added when asked for).
+tag_name() { printf '%s%s' "$TAG_PREFIX" "$1"; }
 
 current_version() { # $1 = plugin file
 	grep -E '^[[:space:]]*\*?[[:space:]]*Version:' "$1" | head -1 \
@@ -124,17 +244,27 @@ is_semver() { printf '%s' "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-
 # processes backslash escapes in the value.
 regex_escape() { printf '%s' "$1" | sed 's/\./[.]/g'; }
 
-# Highest x.y.z tag (with or without a v prefix). Prints the tag as it is
-# named, so `v2.9.14` and `2.9.16` are both found and the numerically highest
-# wins.
+# Highest x.y.z tag. Without a tag prefix, with or without a v: prints the tag
+# as it is named, so `v2.9.14` and `2.9.16` are both found and the
+# numerically highest wins. With one, only <prefix>x.y.z (a monorepo's
+# `pro-v1.0.0` is not the free plugin's `v1.0.0`).
 previous_tag() {
 	git tag --list \
-		| awk '
-			/^v?[0-9]+\.[0-9]+\.[0-9]+$/ {
-				n = $0; sub(/^v/, "", n); split(n, p, ".")
-				key = sprintf("%06d%06d%06d", p[1], p[2], p[3])
+		| awk -v p="$TAG_PREFIX" '
+			{
+				t = $0
+				if (p != "") {
+					if (index(t, p) != 1) next
+					n = substr(t, length(p) + 1)
+					if (n !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) next
+				} else {
+					if (t !~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/) next
+					n = t; sub(/^v/, "", n)
+				}
+				split(n, q, ".")
+				key = sprintf("%06d%06d%06d", q[1], q[2], q[3])
 				# an unprefixed tag beats a v-prefixed one of the same version
-				if (key > best || (key == best && $0 !~ /^v/)) { best = key; tag = $0 }
+				if (key > best || (key == best && t !~ /^v/)) { best = key; tag = t }
 			}
 			END { if (tag != "") print tag }'
 }
@@ -147,37 +277,50 @@ previous_tag() {
 # a PHP file that holds another carrier (the plugin header, or the main class
 # with its $version: jp4wc-pro keeps the two in step) and is not printed
 # elsewhere, where it is a class's own version that happens to be equal.
+# With a plugin directory (PDIR), the rules see paths relative to it, only
+# its files are searched for carriers, and the root's own files (not those of
+# other directories: another plugin of a monorepo can be at the same version)
+# are listed as MENTION.
 classify_lines() { # $1 = version, $2 = plugin file
 	local v="$1" plugin="$2" ve
 	ve="$(regex_escape "$v")"
-	git grep -n -I -F -e "$v" -- \
-		':!node_modules' ':!vendor' ':!dist' ':!*.pot' ':!*.po' ':!*.mo' \
-		':!package-lock.json' ':!composer.lock' ':!*.min.js' ':!*.map' ':!*.lock' \
-		2>/dev/null \
-	| awk -F: -v ve="$ve" -v plugin="$plugin" '
+	{
+		git grep -n -I -F -e "$v" -- "${PDIR:-.}" \
+			":!${PDIR}node_modules" ":!${PDIR}vendor" ":!${PDIR}dist" ':!*.pot' ':!*.po' ':!*.mo' \
+			':!*package-lock.json' ':!*composer.lock' ':!*.min.js' ':!*.map' ':!*.lock' \
+			2>/dev/null || true
+		# the root's own files (glob: * does not cross a /)
+		[ -z "$PDIR" ] || git grep -n -I -F -e "$v" -- ':(glob)*' \
+			':!*package-lock.json' ':!*composer.lock' ':!*.lock' 2>/dev/null || true
+	} \
+	| awk -F: -v ve="$ve" -v plugin="$plugin" -v pdir="$PDIR" '
 		{
 			file = $1; line = $2
 			text = $0; sub(/^[^:]*:[^:]*:/, "", text)
 			# the version must stand on its own (2.9.1 is not 2.9.16)
 			if (text !~ ("(^|[^0-9.])" ve "([^0-9]|$)")) next
 			if (text ~ /@(since|deprecated)/) next
-			if (file == "readme.txt" && text ~ ("^= " ve "( |$)")) next
+			# rel: the path the rules below see; outside the plugin directory nothing is a carrier
+			rel = file; outside = 0
+			if (pdir != "") { if (substr(file, 1, length(pdir)) == pdir) rel = substr(file, length(pdir) + 1); else outside = 1 }
+			if (!outside && rel == "readme.txt" && text ~ ("^= " ve "( |$)")) next
 			kind = "MENTION"
+			if (outside) kind = "MENTION"
 			# decided in END, once the carriers of every file are known
-			if (text ~ /@version/) kind = (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("@version[ \t]+" ve "[ \t]*$")) ? "ATVERSION" : "SKIP"
+			else if (text ~ /@version/) kind = (rel ~ /\.php$/ && rel !~ /^tests?\// && text ~ ("@version[ \t]+" ve "[ \t]*$")) ? "ATVERSION" : "SKIP"
 			else if (file == plugin && text ~ ("^[ \t]*\\*?[ \t]*Version:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
 			# \047 is the single quote: the program itself sits inside shell single quotes
-			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("define\\([ \t]*[\047\"][A-Za-z0-9_]*_VERSION[\047\"][ \t]*,[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
-			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ ("(VERSION|version)[ \t]*=[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
+			else if (rel ~ /\.php$/ && rel !~ /^tests?\// && text ~ ("define\\([ \t]*[\047\"][A-Za-z0-9_]*_VERSION[\047\"][ \t]*,[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
+			else if (rel ~ /\.php$/ && rel !~ /^tests?\// && text ~ ("(VERSION|version)[ \t]*=[ \t]*[\047\"]" ve "[\047\"]")) kind = "CARRIER"
 			# WooCommerce API Manager client: new WC_AM_Client_2_12_2( __FILE__, null, 188, 'x.y.z', ... )
 			# passes the software version as a literal; a stale one makes the update check misreport
-			else if (file ~ /\.php$/ && file !~ /^tests?\// && text ~ /WC_AM_Client[A-Za-z0-9_]*[ \t]*\(/ && text ~ ("[\047\"]" ve "[\047\"]")) kind = "CARRIER"
-			else if (file == "readme.txt" && text ~ ("^Stable tag:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
+			else if (rel ~ /\.php$/ && rel !~ /^tests?\// && text ~ /WC_AM_Client[A-Za-z0-9_]*[ \t]*\(/ && text ~ ("[\047\"]" ve "[\047\"]")) kind = "CARRIER"
+			else if (rel == "readme.txt" && text ~ ("^Stable tag:[ \t]*" ve "[ \t]*$")) kind = "CARRIER"
 			# top level only (one indent step: up to two spaces or one tab): a nested "version" belongs to something else
-			else if ((file == "package.json" || file == "composer.json") && text ~ ("^( ? ?|\t)\"version\":[ \t]*\"" ve "\"")) kind = "CARRIER"
+			else if ((rel == "package.json" || rel == "composer.json") && text ~ ("^( ? ?|\t)\"version\":[ \t]*\"" ve "\"")) kind = "CARRIER"
 			# CLAUDE.md: only a version declaration ("**Version**: x.y.z", "Version: x.y.z",
 			# "現バージョン: x.y.z"); prose such as "stored as entered since x.y.z" is history and stays
-			else if (file == "CLAUDE.md" && (text ~ ("[Vv]ersion[*]*:[ \t]*" ve "([^0-9]|$)") || text ~ ("バージョン[*]*(:|：)[ \t]*" ve "([^0-9]|$)"))) kind = "CARRIER"
+			else if (rel == "CLAUDE.md" && (text ~ ("[Vv]ersion[*]*:[ \t]*" ve "([^0-9]|$)") || text ~ ("バージョン[*]*(:|：)[ \t]*" ve "([^0-9]|$)"))) kind = "CARRIER"
 			n++; F[n] = file; L[n] = line; T[n] = text; K[n] = kind
 			if (kind == "CARRIER" && file ~ /\.php$/) carrier_php[file] = 1
 		}
@@ -191,14 +334,14 @@ classify_lines() { # $1 = version, $2 = plugin file
 		}'
 }
 
-changelog_file() { [ -f readme.txt ] && echo readme.txt || return 1; }
+changelog_file() { [ -f "$README" ] && echo "$README" || return 1; }
 
 # The newest changelog block (bullets under the first `= x.y.z ...` heading
 # after `== Changelog ==`) of the readme at a git ref.
 newest_block_at() { # $1 = ref ("" = working tree)
 	local content
-	if [ -n "$1" ]; then content="$(git show "$1:readme.txt" 2>/dev/null)" || return 1
-	else content="$(cat readme.txt)"; fi
+	if [ -n "$1" ]; then content="$(git show "$1:$README" 2>/dev/null)" || return 1
+	else content="$(cat "$README")"; fi
 	printf '%s\n' "$content" | awk '
 		/^== Changelog ==/ { inlog = 1; next }
 		inlog && /^= / { if (found) exit; found = 1; print; next }
@@ -207,39 +350,47 @@ newest_block_at() { # $1 = ref ("" = working tree)
 }
 
 newest_heading_version() { # from the working tree
-	awk '/^== Changelog ==/ { f = 1; next } f && /^= / { v = $2; print v; exit }' readme.txt
+	awk '/^== Changelog ==/ { f = 1; next } f && /^= / { v = $2; print v; exit }' "$README"
 }
 
 # --- detect ----------------------------------------------------------------
 
 cmd_detect() {
-	local new="" remote branch plugin version prev
+	local new="" remote branch version prev
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--version) new="$2"; shift 2 ;;
 			*) die "detect: unknown argument $1" ;;
 		esac
 	done
-	plugin="$(main_plugin_file)" || die "no root *.php with a 'Plugin Name:' header (set RELEASE_BUMP_PLUGIN_FILE)"
-	version="$(current_version "$plugin")"
-	[ -n "$version" ] || die "no 'Version:' header in $plugin"
+	resolve_plugin
+	version="$(current_version "$PLUGIN")"
+	[ -n "$version" ] || die "no 'Version:' header in $PLUGIN"
 	remote="$(canonical_remote)"
 	branch="$(default_branch "$remote")"
 	prev="$(previous_tag)"
-	echo "PLUGIN_FILE=$plugin"
+	echo "PLUGIN_FILE=$PLUGIN"
+	if [ -n "$PDIR" ]; then echo "PLUGIN_DIR=${PDIR%/}"; else echo "PLUGIN_DIR=."; fi
+	echo "README=$README$([ -f "$README" ] || echo ' (missing)')"
 	echo "VERSION=$version"
+	echo "TAG_PREFIX=$TAG_PREFIX"
 	echo "PREVIOUS_TAG=${prev:-none}"
+	[ ! -f "$README" ] || echo "HEADING_STYLE=$(heading_style)"
 	echo "DEFAULT_BRANCH=$branch"
 	echo "REMOTE=$remote"
 	echo "REPO=$(gh_repo "$remote")"
 	if [ -n "$new" ]; then
 		echo "NEW_VERSION=$new"
+		echo "NEW_TAG=$(tag_name "$new")"
 		echo "RELEASE_BRANCH=release/$new"
 	fi
-	if [ -n "$prev" ] && printf '%s' "$prev" | grep -q '^v'; then
-		echo "WARN=the previous tag '$prev' has a v prefix; release tags are pushed without one (see tag)"
+	if [ -z "$TAG_PREFIX" ] && [ -n "$prev" ] && printf '%s' "$prev" | grep -q '^v'; then
+		echo "WARN=the previous tag '$prev' has a v prefix; tags are pushed without one unless --tag-prefix v (when the deploy workflow strips it)"
 	fi
-	classify_lines "$version" "$plugin"
+	if ! git ls-files --error-unmatch -- "$PLUGIN" >/dev/null 2>&1; then
+		echo "WARN=$PLUGIN is not tracked by git; git grep finds no carriers in it and bump refuses"
+	fi
+	classify_lines "$version" "$PLUGIN"
 }
 
 # --- prs -------------------------------------------------------------------
@@ -257,20 +408,31 @@ in_list() { # $1 = item, $2 = comma list
 	return 1
 }
 
-pr_kind() { # $1 = space-separated files
-	local f docs=1 ci=1
+# With a plugin directory only the files in it count (paths relative to it),
+# and a PR that changes none of them is "outside": another plugin of the
+# monorepo, or the repository's own tooling.
+pr_kind() { # $1 = space-separated files (relative to the root)
+	local f rel docs=1 ci=1 inside=0
 	[ -n "$1" ] || { echo code; return; }
 	for f in $1; do
-		case "$f" in
+		rel="$f"
+		if [ -n "$PDIR" ]; then
+			case "$f" in
+				"$PDIR"*) rel="${f#"$PDIR"}" ;;
+				*) continue ;;
+			esac
+		fi
+		inside=1
+		case "$rel" in
 			docs/*|*.md|.claude/*|CHANGELOG*) ;;
 			*) docs=0 ;;
 		esac
-		case "$f" in
+		case "$rel" in
 			.github/*) ;;
 			*) ci=0 ;;
 		esac
 	done
-	if [ $docs = 1 ]; then echo docs; elif [ $ci = 1 ]; then echo ci; else echo code; fi
+	if [ $inside = 0 ]; then echo outside; elif [ $docs = 1 ]; then echo docs; elif [ $ci = 1 ]; then echo ci; else echo code; fi
 }
 
 referenced_in() { # $1 = block text, $2 = pr number, $3 = comma-separated issues
@@ -330,10 +492,11 @@ cmd_prs() {
 			*) die "prs: unknown argument $1" ;;
 		esac
 	done
+	resolve_plugin
 	[ -n "$since" ] || since="$(previous_tag)"
-	[ -n "$since" ] || die "no previous release tag; pass --since <ref>"
+	[ -n "$since" ] || die "no previous release tag${TAG_PREFIX:+ named $TAG_PREFIX<x.y.z>}; pass --since <ref>"
 	[ -n "$ref" ] || ref="$(default_changelog_ref "$(canonical_remote)")"
-	echo "# merged into $(default_branch "$(canonical_remote)") after $since; changelog read at ${ref:-the working tree}" >&2
+	echo "# merged into $(default_branch "$(canonical_remote)") after $since; changelog $README read at ${ref:-the working tree}${PDIR:+; kinds for ${PDIR%/}}" >&2
 	list_prs "$since" "$ref" "$skip"
 }
 
@@ -347,46 +510,49 @@ rewrite_line() { # $1 = file, $2 = line number, $3 = old, $4 = new (first occurr
 		{ print }' "$1" > "$tmp" && cat "$tmp" > "$1" && rm -f "$tmp"
 }
 
-insert_changelog_block() { # $1 = version, $2 = date, $3 = entries file ("" = none)
+insert_changelog_block() { # $1 = version, $2 = date ("" = a heading without one), $3 = entries file ("" = none)
 	local tmp
-	grep -qE "^= $(regex_escape "$1")( |$)" readme.txt && die "readme.txt already has a changelog heading for $1"
-	grep -q '^== Changelog ==' readme.txt || die "readme.txt has no '== Changelog ==' section"
+	grep -qE "^= $(regex_escape "$1")( |$)" "$README" && die "$README already has a changelog heading for $1"
+	grep -q '^== Changelog ==' "$README" || die "$README has no '== Changelog ==' section"
 	tmp="$(mktemp)"
 	awk -v v="$1" -v d="$2" -v entries="$3" '
 		{ print }
 		/^== Changelog ==/ && !done {
 			print ""
-			print "= " v " - " d " ="
+			print "= " v (d != "" ? " - " d : "") " ="
 			if (entries != "") while ((getline line < entries) > 0) if (line != "") print line
 			print ""
 			done = 1
 			# the blank line that followed the section heading is now the one
 			# printed above; keep the next line only when it is not blank
 			if ((getline nxt) > 0 && nxt != "") print nxt
-		}' readme.txt > "$tmp" && cat "$tmp" > readme.txt && rm -f "$tmp"
+		}' "$README" > "$tmp" && cat "$tmp" > "$README" && rm -f "$tmp"
 }
 
 # package.json is a carrier and is rewritten with the others; this handles
 # package-lock.json, which classify_lines skips. With npm, `npm version`
 # rewrites both files (package.json is then left out of the carrier loop).
+# With a plugin directory, its own package.json (the root's belongs to the
+# repository's tooling and is left alone).
 bump_package_json() { # $1 = old, $2 = new
-	[ -f package.json ] || return 0
+	local pkg="${PDIR}package.json" lock="${PDIR}package-lock.json"
+	[ -f "$pkg" ] || return 0
 	if command -v npm >/dev/null 2>&1; then
-		npm version "$2" --no-git-tag-version --allow-same-version --ignore-scripts >/dev/null
-		echo "package.json: npm version $2 (package-lock.json too when present)"
+		( cd "${PDIR:-.}" && npm version "$2" --no-git-tag-version --allow-same-version --ignore-scripts >/dev/null )
+		echo "$pkg: npm version $2 (package-lock.json too when present)"
 		return
 	fi
-	[ -f package-lock.json ] || return 0
+	[ -f "$lock" ] || return 0
 	# No npm: the root "version" (one indent step) and packages[""] (three steps),
 	# with two-space or tab indentation.
 	local n line
-	n="$(grep -nE "^(  |      |	|			)\"version\":[[:space:]]*\"$(regex_escape "$1")\"" package-lock.json | head -2 | cut -d: -f1 || true)"
-	for line in $n; do rewrite_line package-lock.json "$line" "$1" "$2"; done
-	echo "package-lock.json: rewritten without npm (lines $(printf '%s' "${n:-none}" | tr '\n' ' '))"
+	n="$(grep -nE "^(  |      |	|			)\"version\":[[:space:]]*\"$(regex_escape "$1")\"" "$lock" | head -2 | cut -d: -f1 || true)"
+	for line in $n; do rewrite_line "$lock" "$line" "$1" "$2"; done
+	echo "$lock: rewritten without npm (lines $(printf '%s' "${n:-none}" | tr '\n' ' '))"
 }
 
 cmd_bump() {
-	local new="" date="" entries="" allow_dirty=0 plugin version lines kind file line text
+	local new="" date="" entries="" allow_dirty=0 version lines kind file line text style
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--date) date="$2"; shift 2 ;;
@@ -398,31 +564,41 @@ cmd_bump() {
 	done
 	[ -n "$new" ] || die "bump: version required"
 	is_semver "$new" || die "bump: '$new' is not x.y.z (no v prefix)"
-	[ -n "$date" ] || date="$(date +%Y-%m-%d)"
-	printf '%s' "$date" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || die "bump: --date must be YYYY-MM-DD"
+	[ -z "$date" ] || printf '%s' "$date" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || die "bump: --date must be YYYY-MM-DD"
 	[ -z "$entries" ] || [ -f "$entries" ] || die "bump: entries file not found: $entries"
 	if [ $allow_dirty = 0 ] && [ -n "$(git status --porcelain)" ]; then
 		die "bump: the working tree has changes (commit or stash them, or --allow-dirty)"
 	fi
-	plugin="$(main_plugin_file)" || die "no root *.php with a 'Plugin Name:' header"
-	version="$(current_version "$plugin")"
+	resolve_plugin
+	version="$(current_version "$PLUGIN")"
 	[ "$version" != "$new" ] || die "bump: already at $new"
-	changelog_file >/dev/null || die "bump: no readme.txt"
+	changelog_file >/dev/null || die "bump: no $README"
+	style="$(heading_style)"
+	if [ "$style" = bare ]; then
+		[ -z "$date" ] || echo "NOTE the changelog headings of $README have no date; --date $date is not written"
+		date=""
+	else
+		[ -n "$date" ] || date="$(date +%Y-%m-%d)"
+	fi
 
 	# Take the list before rewriting anything: git grep must not see a file
 	# that has already been bumped. package.json is handled by npm below, so
 	# it is skipped here when npm exists.
-	lines="$(classify_lines "$version" "$plugin")"
+	lines="$(classify_lines "$version" "$PLUGIN")"
+	# git grep reads tracked files only: without the header among the carriers
+	# the bump would write a changelog heading and no version at all
+	printf '%s\n' "$lines" | grep -qF "CARRIER$(printf '\t')$PLUGIN$(printf '\t')" \
+		|| die "bump: the 'Version:' header of $PLUGIN is not among the carriers (git grep reads tracked files only: is it committed?)"
 	printf '%s\n' "$lines" | while IFS="$(printf '\t')" read -r kind file line text; do
 		[ "$kind" = CARRIER ] || continue
-		if [ "$file" = package.json ] && command -v npm >/dev/null 2>&1; then continue; fi
+		if [ "$file" = "${PDIR}package.json" ] && command -v npm >/dev/null 2>&1; then continue; fi
 		rewrite_line "$file" "$line" "$version" "$new"
 		echo "$file:$line: $version -> $new"
 	done
 	bump_package_json "$version" "$new"
 	insert_changelog_block "$new" "$date" "$entries"
-	echo "readme.txt: added '= $new - $date =' with $(if [ -n "$entries" ]; then grep -c . "$entries"; else echo 0; fi) entries"
-	echo "DONE version=$new date=$date"
+	echo "$README: added '= $new${date:+ - $date} =' with $(if [ -n "$entries" ]; then grep -c . "$entries"; else echo 0; fi) entries"
+	echo "DONE version=$new date=${date:-none}"
 }
 
 # --- add-entries -----------------------------------------------------------
@@ -437,10 +613,11 @@ cmd_add_entries() {
 		esac
 	done
 	[ -n "$file" ] && [ -f "$file" ] || die "add-entries: entries file required"
-	changelog_file >/dev/null || die "add-entries: no readme.txt"
+	resolve_plugin
+	changelog_file >/dev/null || die "add-entries: no $README"
 	[ -n "$version" ] || version="$(newest_heading_version)"
-	[ -n "$version" ] || die "add-entries: readme.txt has no changelog heading"
-	grep -qE "^= $(regex_escape "$version")( |$)" readme.txt || die "add-entries: no changelog heading for $version"
+	[ -n "$version" ] || die "add-entries: $README has no changelog heading"
+	grep -qE "^= $(regex_escape "$version")( |$)" "$README" || die "add-entries: no changelog heading for $version"
 	tmp="$(mktemp)"
 	added="$(awk -v ve="$(regex_escape "$version")" -v entries="$file" '
 		BEGIN { n = 0; while ((getline line < entries) > 0) if (line != "") { n++; want[n] = line } }
@@ -454,15 +631,15 @@ cmd_add_entries() {
 			else if (inblock && !flushed) seen[$0] = 1
 			print
 		}
-		END { if (inblock && !flushed) flush(); print added + 0 > "/dev/stderr" }' readme.txt 2>&1 >"$tmp" | tail -1)"
-	cat "$tmp" > readme.txt && rm -f "$tmp"
-	echo "readme.txt: $added new line(s) under '= $version'"
+		END { if (inblock && !flushed) flush(); print added + 0 > "/dev/stderr" }' "$README" 2>&1 >"$tmp" | tail -1)"
+	cat "$tmp" > "$README" && rm -f "$tmp"
+	echo "$README: $added new line(s) under '= $version'"
 }
 
 # --- check -----------------------------------------------------------------
 
 cmd_check() {
-	local since="" skip="" status=0 remote branch plugin version carriers n behind cur
+	local since="" skip="" status=0 remote branch version carriers n behind cur
 	local heading missing unref strings pot_changed pot_last number kind sha issues ref title
 	local calls pot_commit late c
 	while [ $# -gt 0 ]; do
@@ -472,23 +649,23 @@ cmd_check() {
 			*) die "check: unknown argument $1" ;;
 		esac
 	done
+	resolve_plugin
 	remote="$(canonical_remote)"
 	branch="$(default_branch "$remote")"
-	plugin="$(main_plugin_file)" || die "no root *.php with a 'Plugin Name:' header"
-	version="$(current_version "$plugin")"
+	version="$(current_version "$PLUGIN")"
 	[ -n "$since" ] || since="$(previous_tag)"
-	[ -n "$since" ] || die "no previous release tag; pass --since <ref>"
+	[ -n "$since" ] || die "no previous release tag${TAG_PREFIX:+ named $TAG_PREFIX<x.y.z>}; pass --since <ref>"
 	git rev-parse -q --verify "$since^{commit}" >/dev/null || die "unknown tag or ref: $since"
 	git fetch -q "$remote" "$branch" 2>/dev/null || true
 
 	cur="$(git branch --show-current 2>/dev/null || true)"
 	[ -n "$cur" ] || cur="detached at $(git rev-parse --short HEAD)"
-	echo "version:   $version (from $plugin)"
+	echo "version:   $version (from $PLUGIN)"
 	echo "previous:  $since"
 	echo "branch:    $cur vs $remote/$branch"
 
 	# 1. carriers agree with the plugin header
-	carriers="$(classify_lines "$version" "$plugin" | awk -F'\t' '$1 == "CARRIER" { print $2 ":" $3 }')"
+	carriers="$(classify_lines "$version" "$PLUGIN" | awk -F'\t' '$1 == "CARRIER" { print $2 ":" $3 }')"
 	n="$(printf '%s\n' "$carriers" | grep -c . || true)"
 	if [ "$n" -lt 2 ]; then
 		echo "WARN     carriers: only $n line(s) hold $version — run detect and look at MENTION lines"
@@ -496,20 +673,21 @@ cmd_check() {
 		echo "OK       carriers: $n lines hold $version ($(printf '%s' "$carriers" | tr '\n' ' '))"
 	fi
 	# Stable tag must match specifically (the deploy copies readme.txt as is)
-	if [ -f readme.txt ] && ! grep -qE "^Stable tag:[[:space:]]*$(regex_escape "$version")[[:space:]]*$" readme.txt; then
-		echo "MISSING  readme.txt 'Stable tag:' is not $version"; status=1
+	if [ -f "$README" ] && ! grep -qE "^Stable tag:[[:space:]]*$(regex_escape "$version")[[:space:]]*$" "$README"; then
+		echo "MISSING  $README 'Stable tag:' is not $version"; status=1
 	fi
-	if [ -f package.json ] && ! grep -qE "^[[:space:]]*\"version\":[[:space:]]*\"$(regex_escape "$version")\"" package.json; then
-		echo "MISSING  package.json version is not $version"; status=1
+	if [ -f "${PDIR}package.json" ] && ! grep -qE "^[[:space:]]*\"version\":[[:space:]]*\"$(regex_escape "$version")\"" "${PDIR}package.json"; then
+		echo "MISSING  ${PDIR}package.json version is not $version"; status=1
 	fi
 
-	# 2. changelog heading
-	if [ -f readme.txt ]; then
-		heading="$(grep -E "^= $(regex_escape "$version")( |$)" readme.txt | head -1 || true)"
+	# 2. changelog heading: `= x.y.z - YYYY-MM-DD =`, or `= x.y.z =` in a readme
+	#    that writes no dates (both match the deploy workflow's '^= x.y.z ')
+	if [ -f "$README" ]; then
+		heading="$(grep -E "^= $(regex_escape "$version")( |$)" "$README" | head -1 || true)"
 		if [ -z "$heading" ]; then
-			echo "MISSING  readme.txt has no '= $version - <date> =' heading"; status=1
-		elif ! printf '%s' "$heading" | grep -qE "^= $(regex_escape "$version") - [0-9]{4}-[0-9]{2}-[0-9]{2} =$"; then
-			echo "WARN     heading '$heading' is not '= $version - YYYY-MM-DD =' (the deploy workflow matches '^= $version ')"
+			echo "MISSING  $README has no '= $version - <date> =' (or '= $version =') heading"; status=1
+		elif ! printf '%s' "$heading" | grep -qE "^= $(regex_escape "$version")( - [0-9]{4}-[0-9]{2}-[0-9]{2})? =$"; then
+			echo "WARN     heading '$heading' is not '= $version - YYYY-MM-DD =' or '= $version =' (the deploy workflow matches '^= $version ')"
 		else
 			echo "OK       heading: $heading"
 		fi
@@ -548,18 +726,19 @@ EOF
 
 	# 5. translation strings added since the previous tag vs the .pot, both read at HEAD: on a
 	#    release branch the POT regen is a commit of that branch and not yet of the default
-	#    branch (jp4wc-pro 3.2.0 was warned "no .pot change" right after its regen commit)
+	#    branch (jp4wc-pro 3.2.0 was warned "no .pot change" right after its regen commit).
+	#    With a plugin directory, only its sources and .pot (a pathspec `*` crosses `/`).
 	calls="(__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\\([[:space:]]*['\"]"
-	strings="$(git diff "$since..HEAD" -- '*.php' '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null \
+	strings="$(git diff "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" 2>/dev/null \
 		| grep -cE "^\+.*[^A-Za-z0-9_]$calls" || true)"
 	if [ "${strings:-0}" -gt 0 ]; then
-		pot_changed="$(git diff --name-only "$since..HEAD" -- '*.pot' 2>/dev/null | head -1 || true)"
+		pot_changed="$(git diff --name-only "$since..HEAD" -- "${PDIR}*.pot" 2>/dev/null | head -1 || true)"
 		if [ -n "$pot_changed" ]; then
 			pot_commit="$(git log -1 --format=%H HEAD -- "$pot_changed")"
 			pot_last="$(git log -1 --format='%h %cs' "$pot_commit")"
 			# commits that changed translation calls and are not in the history of the regen
 			late=""
-			for c in $(git log --format=%H -G"(^|[^A-Za-z0-9_])$calls" "$since..HEAD" -- '*.php' '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null); do
+			for c in $(git log --format=%H -G"(^|[^A-Za-z0-9_])$calls" "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" 2>/dev/null); do
 				git merge-base --is-ancestor "$c" "$pot_commit" || late="$late ${c:0:7}"
 			done
 			if [ -z "$late" ]; then
@@ -581,7 +760,7 @@ EOF
 # --- tag -------------------------------------------------------------------
 
 cmd_tag() {
-	local version="" remote="" dry=0 branch plugin head_version
+	local version="" remote="" dry=0 branch head_version tag
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--remote) remote="$2"; shift 2 ;;
@@ -591,8 +770,11 @@ cmd_tag() {
 		esac
 	done
 	[ -n "$version" ] || die "tag: version required"
-	printf '%s' "$version" | grep -q '^v' && die "tag: no v prefix — the deploy workflow matches '= $version ' in readme.txt"
+	printf '%s' "$version" | grep -q '^v' && die "tag: no v prefix — the deploy workflow matches '= $version ' in readme.txt (a workflow that strips a prefix: --tag-prefix v)"
 	is_semver "$version" || die "tag: '$version' is not x.y.z"
+	tag="$(tag_name "$version")"
+	git check-ref-format "refs/tags/$tag" || die "tag: '$tag' is not a valid tag name (--tag-prefix $TAG_PREFIX)"
+	resolve_plugin
 	[ -n "$remote" ] || remote="$(canonical_remote)"
 	if [ "$remote" != "$(canonical_remote)" ]; then
 		die "tag: $remote is not the canonical remote ($(canonical_remote)); a fork has no deploy secrets"
@@ -602,25 +784,38 @@ cmd_tag() {
 	[ "$(git branch --show-current)" = "$branch" ] || die "tag: not on $branch"
 	git fetch -q "$remote" "$branch" --tags 2>/dev/null || true
 	[ "$(git rev-parse HEAD)" = "$(git rev-parse "$remote/$branch")" ] || die "tag: HEAD is not $remote/$branch (pull or push first)"
-	plugin="$(main_plugin_file)" || die "no root *.php with a 'Plugin Name:' header"
-	head_version="$(current_version "$plugin")"
-	[ "$head_version" = "$version" ] || die "tag: $plugin says $head_version, not $version (merge the bump PR first)"
-	if [ -f readme.txt ]; then
-		grep -qE "^Stable tag:[[:space:]]*$(regex_escape "$version")[[:space:]]*$" readme.txt || die "tag: readme.txt Stable tag is not $version"
-		grep -qE "^= $(regex_escape "$version") " readme.txt || die "tag: readme.txt has no '= $version - <date> =' heading (empty release body)"
+	head_version="$(current_version "$PLUGIN")"
+	[ "$head_version" = "$version" ] || die "tag: $PLUGIN says $head_version, not $version (merge the bump PR first)"
+	if [ -f "$README" ]; then
+		grep -qE "^Stable tag:[[:space:]]*$(regex_escape "$version")[[:space:]]*$" "$README" || die "tag: $README Stable tag is not $version"
+		grep -qE "^= $(regex_escape "$version") " "$README" || die "tag: $README has no '= $version - <date> =' (or '= $version =') heading (empty release body)"
 	fi
-	git rev-parse -q --verify "refs/tags/$version" >/dev/null && die "tag: $version already exists locally"
-	[ -z "$(git ls-remote --tags "$remote" "refs/tags/$version")" ] || die "tag: $version already exists on $remote"
+	git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag: $tag already exists locally"
+	[ -z "$(git ls-remote --tags "$remote" "refs/tags/$tag")" ] || die "tag: $tag already exists on $remote"
 
-	echo "tag:    $version at $(git rev-parse --short HEAD) ($branch)"
+	echo "tag:    $tag at $(git rev-parse --short HEAD) ($branch; $PLUGIN $version)"
 	echo "push:   $remote ($(gh_repo "$remote"))"
 	if [ $dry = 1 ]; then echo "DRY-RUN nothing created or pushed"; return 0; fi
-	git tag "$version"
-	git push "$remote" "refs/tags/$version"
-	echo "DONE pushed $version to $remote — watch: gh run list --repo $(gh_repo "$remote") --branch $version"
+	git tag "$tag"
+	git push "$remote" "refs/tags/$tag"
+	echo "DONE pushed $tag to $remote — watch: gh run list --repo $(gh_repo "$remote") --branch $tag"
 }
 
 # --- main ------------------------------------------------------------------
+
+# Global options may come before or after the subcommand.
+ARGS=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--plugin) [ $# -ge 2 ] || die "--plugin needs a directory"; PLUGIN_DIR_ARG="$2"; shift 2 ;;
+		--plugin=*) PLUGIN_DIR_ARG="${1#--plugin=}"; shift ;;
+		--tag-prefix) [ $# -ge 2 ] || die "--tag-prefix needs a value"; TAG_PREFIX="$2"; shift 2 ;;
+		--tag-prefix=*) TAG_PREFIX="${1#--tag-prefix=}"; shift ;;
+		*) ARGS+=("$1"); shift ;;
+	esac
+done
+# bash 3.2 treats "${ARGS[@]}" of an empty array as unbound under set -u
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 [ $# -gt 0 ] || { usage; exit 2; }
 cmd="$1"; shift
