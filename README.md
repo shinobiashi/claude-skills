@@ -64,10 +64,39 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 
 ## 変更のルール
 
-1. スキルの編集はこのリポジトリで行い、`bash install.sh` で配置する。
+1. スキルの編集はこのリポジトリで行い、`bash install.sh` で配置する。`~/.claude/skills/` の配置済みコピーは直接編集しない。
+   `install.sh` が `rsync --delete` で上書きするので、そこでの変更はリポジトリに届かず、次の配置で消える。
+   ほかのリポジトリでスキルを実行していて不具合を見つけたときも、`~/Dev/claude-skills/skills/<スキル名>/` を直して
+   `bash install.sh <スキル名>` で配置する。
 2. バージョンや「最終確認」日付を含む記述を直したら、`CHANGELOG.md` に 1 行残す。
 3. `wp-*` の一部は [WordPress/agent-skills](https://github.com/WordPress/agent-skills) からの取り込みに WooCommerce 向けの加筆を重ねたもの。上流を取り込むときは `cp` で上書きせず差分を手でマージする。
 4. 各プロジェクトの `.claude/skills/` に共有スキルのコピーを置かない（2026-09 以前のコピーは古いので削除する）。
+
+### 配置済みコピーへの書き込みを止めるガード
+
+2026-09-19〜10-16 に、配置済みコピーを直接直してソースとずれる事故が少なくとも 13 回起きた。どれもほかのリポジトリのセッションで、
+スキルのスクリプトを実行している途中に、手元にある配置済みのパスをそのまま直していた。これを防ぐため、各自の `~/.claude/` に
+次の 2 つを置いている（このリポジトリには含めていない）。
+
+| 置き場所 | 役割 |
+|---|---|
+| `~/.claude/hooks/guard-installed-skills.py`（`~/.claude/settings.json` の PreToolUse に登録） | このリポジトリにあるスキルの配置済みコピーへの書き込みを拒否し、直すべきソースのパスと `install.sh <スキル名>` を返す。対象は Edit / Write と、Bash のリダイレクト・`sed -i`・`cp` / `rsync` / `mv` の行き先・`rm` など。書き込み先をコマンドから読み取れないもの（`xargs`・`while read`・Python などのスクリプト）は確認を求める。読み取り・スクリプトの実行・`install.sh` は止めない。テストは同じディレクトリの `test-guard-installed-skills.sh` |
+| `~/.claude/CLAUDE.md` の共通ルール | 上のルール 1 を、どのリポジトリのセッションにも最初から読ませる |
+
+配置済みコピーで一時的に試したいときは、`~/.claude/settings.json` からこのフックの登録を外す。
+
+### drift を見つけたとき（再同期）
+
+`bash install.sh --check` が `[DRIFT]` を出したら、`bash install.sh` を実行する前にどちらが新しいかを確かめる。
+配置済みコピーの方が新しいまま `install.sh` を実行すると、その変更は消える。
+
+1. `git fetch` して、手元の `main` が `origin/main` より遅れていないかを見る。配置済みコピーが `origin/main` と同じなら、
+   別のセッションの変更を手元に取り込んでいないだけなので、`git pull --ff-only` で解消する
+2. 配置済みコピーにしか無い変更なら、`diff -ru skills/<スキル名> ~/.claude/skills/<スキル名>` で中身を確かめてソースへ写し、
+   そのスキルのテストを流す
+3. `CHANGELOG.md` の Fixed に「drift の再同期」として、いつ・何を取り込んだかを残し、
+   `chore: resync installed-side edits of <スキル名> into the source` でコミットする
+4. `bash install.sh --check` で `[ok]` に戻ったことを確かめる
 
 ## スキル一覧
 
