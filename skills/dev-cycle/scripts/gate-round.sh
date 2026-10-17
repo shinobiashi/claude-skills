@@ -15,8 +15,11 @@
 #      is never printed for a failed push.
 #   2. Replies say "fixed in <sha>". They must only go out after that commit
 #      is on the PR head, or the bot and the reader are pointed at a sha
-#      GitHub does not have. `publish` refuses when the local HEAD is not the
-#      PR head (override: --allow-unpushed).
+#      GitHub does not have. `publish` waits up to 60s for the PR head to
+#      catch up with a push just made (GitHub moves it a few seconds after
+#      the push lands; saai-signal-mail PR #2 hit the refusal three times
+#      out of three by publishing right after pushing) and refuses when the
+#      local HEAD still is not the PR head (override: --allow-unpushed).
 #   3. A half-published round is worse than an unpublished one. `publish`
 #      validates every input file before it posts anything, and on a failure
 #      midway it names what was already posted so the rerun can leave those
@@ -57,6 +60,10 @@
 # Reply / summary text is only ever read from files, never from the command
 # line, for the same quoting reasons as gate-threads.sh.
 set -euo pipefail
+
+# How long `publish` waits for GitHub to report the just-pushed HEAD as the PR head.
+HEAD_WAIT=60
+HEAD_STEP=5
 
 DRY_RUN=0
 ARGS=()
@@ -243,12 +250,20 @@ cmd_publish() {
 	command -v gh >/dev/null 2>&1 || die "gh is required"
 
 	if [ "$allow_unpushed" -eq 0 ]; then
-		local local_head pr_head
+		# GitHub moves the PR head a few seconds after a push lands: wait for it
+		# instead of refusing a publish that follows its push immediately.
+		local local_head pr_head waited=0
 		local_head="$(git rev-parse HEAD)"
-		pr_head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
-		if [ "$local_head" != "$pr_head" ]; then
-			die "local HEAD ${local_head:0:7} is not the PR head ${pr_head:0:7}: push first (replies must point at commits GitHub has), or pass --allow-unpushed"
-		fi
+		while :; do
+			pr_head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+			[ "$local_head" != "$pr_head" ] || break
+			if [ "$waited" -ge "$HEAD_WAIT" ]; then
+				die "local HEAD ${local_head:0:7} is not the PR head ${pr_head:0:7} after ${HEAD_WAIT}s: push first (replies must point at commits GitHub has), or pass --allow-unpushed"
+			fi
+			echo "gate-round: PR head is ${pr_head:0:7}, local HEAD is ${local_head:0:7}; waiting for GitHub to catch up (${waited}/${HEAD_WAIT}s)" >&2
+			sleep "$HEAD_STEP"
+			waited=$((waited + HEAD_STEP))
+		done
 	fi
 
 	local posted=() n

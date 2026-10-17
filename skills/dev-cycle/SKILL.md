@@ -260,7 +260,8 @@ Codex の自動レビュー(push で自動起動する設定)が有効かどう�
 という案内が返るだけ)。
 
 Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大約 5 分 + 応答待ち最大 `--timeout`
-〔既定 900 秒〕≒ 最悪 1,200 秒。短いと `DONE` / 終了コードを出す前にスクリプトが殺される)。出力は `| tail` などに
+〔既定 900 秒〕≒ 最悪 1,200 秒。短いと `DONE` / 終了コードを出す前にスクリプトが殺される)。`--wait-ci` を付けるときは
+`--ci-timeout`(既定 2,700 秒)も足して **5400000ms**。出力は `| tail` などに
 流さずファイルに書き出し、終了コードを取ってから読む(パイプに流すと終了コードが失われる)。
 
 スクリプトがやること:
@@ -293,11 +294,16 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   「Completed なのに応答が見つからない」かを伝える
 - `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
   `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
-- `--wait-ci` の時は依頼より前に `gh pr checks <N> --json name,bucket` を 20 秒ごとに見て、現 HEAD の check が
-  すべて終わるまで待つ(最大 `--ci-timeout` 秒。既定 480 秒 = CI + 登録確認 5 分 + 応答待ち 15 分が外側の
-  timeout 1,800 秒に収まる値)。fail / cancel が 1 つでも出たら残りを待たずに **exit 3**(何も依頼しない)。
-  180 秒たっても check が 1 つも現れない時も exit 3(`CI=none`。CI が始まっていないのを green と見なさない)。
-  jp4wc-rakusync PR #14 では、依頼の前の CI 待ちの until ループを 1 PR で 5 回手書きしていた
+- `--wait-ci` の時は依頼より前に、現 HEAD の sha の **workflow run**(`gh api repos/…/actions/runs?head_sha=`)を
+  20 秒ごとに見て、すべて完了するまで待つ(最大 `--ci-timeout` 秒。既定 2,700 秒 = 15 分の CI にランナー待ちが乗っても
+  足りる値)。run は push が登録された瞬間から queued として見えるので、ランナー待ちを「CI が始まっていない」と
+  誤読しない(`gh pr checks` はジョブが始まるまで「no checks」と言う。saai-signal-mail PR #8 では 20 分の queued を
+  それで取り逃した)。その sha の run が 1 つも無い repo(Actions 以外の CI)では `gh pr checks` に切り替える。
+  失敗・取消の run が 1 つでも出たら残りを待たずに **exit 3**(何も依頼しない)で、失敗したジョブ名と、セットアップで
+  死んだとき(ランナー・ネットワーク・イメージビルド)の `gh run rerun <id> --failed` を出す。180 秒たっても run も check も
+  現れない時も exit 3(`CI=none`)。待っている間に PR の head が変わったら `CI=head-moved` の exit 3(新しい head で
+  やり直す)。jp4wc-rakusync PR #14 では依頼の前の CI 待ちの until ループを 1 PR で 5 回、saai-signal-mail PR #8 では
+  6 回手書きしていた
 - 最後に bot ごとの状態行 `COPILOT=responded|timeout|unregistered|not-waited` /
   `CODEX=responded|timeout|request-failed|not-waited` と `CI=passed|failed|none|timeout|not-waited` を出し、成功時だけ `DONE` を出す。同時依頼で片方だけ
   応答した時は、この行で応答した bot を見分ける(終了コードだけで判断しない)
@@ -305,9 +311,11 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
 終了コード: `0` 待った bot がすべて現 HEAD に応答 / `1` TIMEOUT(依頼は登録されたが `--timeout` 内に応答が無い)/
 `2` 依頼が出せなかった・登録されなかった(Copilot: 2 方法とも 5 分以内に確認できず。Codex: "@codex review" を
 投稿できず)。`2` は他に待つ bot が無ければ約 5 分で返る(同時依頼で他方を待っている時は、その待ちの後に返る)。
-`3`(`--wait-ci` の時だけ)CI が green にならなかった: check の失敗・取消(`CI=failed`)、check が現れない(`CI=none`)、
-`--ci-timeout` 内に終わらない(`CI=timeout`)。何も依頼していないので依頼回数に数えない。`failed` は Step 5 の red の手順に、
-`none` / `timeout` は「人間に確認する条件」(CI が非自明な状態)に進む。
+`3`(`--wait-ci` の時だけ)CI が green にならなかった: run / check の失敗・取消(`CI=failed`)、run も check も現れない(`CI=none`)、
+`--ci-timeout` 内に終わらない(`CI=timeout`)、待っている間に head が変わった(`CI=head-moved`)。何も依頼していないので依頼回数に
+数えない。`failed` は出力の失敗ジョブを見て Step 5 の red の手順に(セットアップで死んだジョブなら `gh run rerun <id> --failed` の
+あと同じ依頼をやり直す)、`none` / `timeout` は「人間に確認する条件」(CI が非自明な状態)に、`head-moved` は新しい head で
+依頼し直す。
 
 **exit 2(Copilot 未登録)の時**は「人間に確認する条件」で次の選択肢を出す:
 (a) ユーザーが PR 画面の Reviewers から Copilot を手動で依頼し、Claude は `"$R" <N> --wait-only --since <T>`
@@ -395,6 +403,8 @@ git push origin <ブランチ>
 論理的に独立した修正はコミットを分ける。push 後に `G<n>.md`(下記フォーマット)と状態ファイルを
 更新し、`docs: record dev-cycle gate round <n>` として commit・push する。
 
+`gate-round.sh publish` は PR の head が push に追いつくのを最長 60 秒待つので、push の直後に続けて実行してよい
+(以前は GitHub 側の数秒の遅れで「local HEAD is not the PR head」と拒まれていた)。
 push は `git push` の代わりに `scripts/gate-round.sh push` で行うと、push 直前の UTC 時刻 `T` を取り、
 push が成功した時だけ `HEAD=<sha>` と `T=<時刻>` を出力する。この `T` を次の bot の `--since` と
 `gate-threads.sh list` に使う(push の後に取った `T` や前ラウンドの `T` を流用すると、指摘の取りこぼしや
@@ -499,7 +509,7 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
   "$R" <N> --since <T> --copilot-only --wait-ci                 # Copilot のターン
   ```
   `--wait-ci` を付けると、前のターンの修正 push の CI 待ち(Step 5)もこの 1 回の呼び出しで済む
-  Bash は Step 6 と同じく `run_in_background`・timeout 1800000ms
+  Bash は Step 6 と同じく `run_in_background`・timeout 5400000ms(`--wait-ci` 込み)
 - **`<T>`** は、現在の HEAD を作った直近の push の直前時刻(`gate-round.sh push` が出力する)。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
 - **対象スレッドの絞り込み**: `gate-threads.sh list` / `status` は全 bot のスレッドを返す。そのターンの bot の author
   (Codex: `chatgpt-codex-connector`、Copilot: `copilot-pull-request-reviewer`)だけを対象にする。`bodies` は Copilot のターンだけ読む。

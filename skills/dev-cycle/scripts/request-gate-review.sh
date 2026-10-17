@@ -53,13 +53,17 @@
 #   itself fails twice, Codex is not waited for — nothing was asked.
 # - Requests go out before any waiting, Codex first (its request is one
 #   comment; Copilot's confirmation can take up to 90s per method).
-# - `--wait-ci` waits for the PR's checks on the current head before asking
-#   anything, so a turn no longer needs a hand-written `gh pr checks` loop in
-#   front of this script (jp4wc-rakusync PR #14 wrote the same loop five
-#   times). A red check stops the run before any request: a bot asked to
-#   review a commit whose CI failed reviews code that is about to change.
-#   "No check ever appeared" is reported as its own failure, never as
-#   "passed" — a repository whose CI did not start is not a green one.
+# - `--wait-ci` waits for the CI of the current head before asking anything,
+#   so a turn no longer needs a hand-written wait loop in front of this
+#   script (jp4wc-rakusync PR #14 wrote the same loop five times;
+#   saai-signal-mail PR #8 six). It follows the GitHub Actions workflow runs
+#   of the head sha, which exist from the moment the push registers, even
+#   while they wait for a runner — `gh pr checks` says "no checks" until a
+#   job starts, which once read a 20-minute runner backlog as "CI did not
+#   start". A repository without Actions falls back to `gh pr checks`. A red
+#   run stops the wait before any request: a bot asked to review a commit
+#   whose CI failed reviews code that is about to change. "No run and no
+#   check ever appeared" is reported as its own failure, never as "passed".
 #
 # Usage:
 #   request-gate-review.sh <PR> [--copilot-only|--codex-only] [--request-codex]
@@ -69,15 +73,21 @@
 #   --wait-only   request nothing; only wait for the responses. For after a
 #                 manual request in the UI (exit 2), or to resume a wait that
 #                 timed out (exit 1). Pass the original run's --since.
-#   --wait-ci     first wait until every check of the PR's head has finished
-#                 (`gh pr checks`, polled every 20s); request only when none
-#                 failed or was cancelled. A failure stops the wait at once,
-#                 without waiting for the other checks. Exit 3 when a check
-#                 failed, when no check appeared within 180s, or when checks
-#                 were still running after --ci-timeout (default 480s, so
-#                 that CI + confirmation + the default --timeout stay within
-#                 the 30-minute background timeout dev-cycle uses; giving
-#                 --ci-timeout implies --wait-ci).
+#   --wait-ci     first wait until the CI of the PR's head has finished;
+#                 request only when it passed. Polled every 20s through the
+#                 workflow runs of the head sha (`gh api
+#                 repos/{owner}/{repo}/actions/runs?head_sha=…`), with
+#                 `gh pr checks` as the fallback when the repository has no
+#                 Actions run for that sha. A failed or cancelled run stops
+#                 the wait at once and lists the run's failed jobs with the
+#                 `gh run rerun <id> --failed` to use when a job died in
+#                 setup (runner, network, image build) rather than in the
+#                 code. Exit 3 when CI failed, when no run and no check
+#                 appeared within 180s, when the PR head changed during the
+#                 wait, or when CI was still running after --ci-timeout
+#                 (default 2700s = 45 min: a 15-minute pipeline plus a runner
+#                 backlog; giving --ci-timeout implies --wait-ci). Size the
+#                 outer background timeout to --ci-timeout + 5 min + --timeout.
 #
 # Prints `T=<UTC timestamp>` once the requests are out — record it, it is
 # what `gate-threads.sh list/status/bodies` needs to identify this round's
@@ -93,7 +103,7 @@
 # Ends with one status line per bot and one for CI, then `DONE` only on success:
 #   COPILOT=responded|timeout|unregistered|not-waited
 #   CODEX=responded|timeout|request-failed|not-waited
-#   CI=passed|failed|none|timeout|not-waited
+#   CI=passed|failed|none|timeout|head-moved|not-waited
 #
 # Exit status:
 #   0  every bot being waited on responded to the current head
@@ -106,9 +116,10 @@
 #      few minutes when nothing else is waited on; when the other bot is
 #      waited on, that wait runs first and the status lines say which bot
 #      responded
-#   3  --wait-ci: CI did not pass (a check failed or was cancelled, no check
-#      appeared, or checks were still running at --ci-timeout). Nothing was
-#      requested; the CI line says which
+#   3  --wait-ci: CI did not pass (a run or check failed or was cancelled,
+#      no run and no check appeared, the PR head moved during the wait, or
+#      CI was still running at --ci-timeout). Nothing was requested; the CI
+#      line says which
 #
 # Worst case: --ci-timeout (with --wait-ci), then about 5 minutes of
 # requesting/confirming plus --timeout.
@@ -128,7 +139,7 @@ wait_only=0
 timeout=900
 since=""
 wait_ci=0
-ci_timeout=480
+ci_timeout=2700
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -184,50 +195,114 @@ finish() {
 	exit "$1"
 }
 
-# CI wait: poll interval, and how long a PR may show no check at all before
-# that counts as "CI did not start" (a push takes a few seconds to register
-# its workflow runs; `gh pr checks` fails with "no checks reported" until
-# then).
+slug="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+owner="${slug%%/*}"
+repo="${slug#*/}"
+head_sha="$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')"
+
+# CI wait: poll interval, and how long a PR may show neither a workflow run
+# nor a check before that counts as "CI did not start" (a push takes a few
+# seconds to register its runs).
 CI_STEP=20
 CI_APPEAR=180
 
-# Waits until every check of the PR's head has finished. Sets ci_status and
-# returns 0 only when none failed or was cancelled. `bucket` is gh's own
-# grouping of check states (pass, fail, pending, skipping, cancel). The
-# budget is counted in sleeps, like the confirmation polls.
+# A run's conclusion that is not one of these is a failure (failure,
+# cancelled, timed_out, action_required, startup_failure, stale).
+CI_OK='($c == "success" or $c == "skipped" or $c == "neutral")'
+
+# The workflow runs of the head sha as a JSON array of {id, name, status,
+# conclusion}; `[]` when there are none or gh cannot answer.
+ci_runs() {
+	gh api "repos/$slug/actions/runs?head_sha=$head_sha&per_page=50" 2>/dev/null \
+		| jq -c '[.workflow_runs[]? | {id, name, status, conclusion}]' 2>/dev/null || echo '[]'
+}
+
+# Lists the failed runs and their failed jobs, with the rerun to use when a
+# job died in setup rather than in the code.
+report_failed_runs() {
+	local id name conclusion jobs
+	while IFS=$'\t' read -r id name conclusion; do
+		[ -n "$id" ] || continue
+		echo "request-gate-review:   $name ($conclusion, run $id)" >&2
+		jobs="$(gh run view "$id" --json jobs 2>/dev/null | jq -r --arg ok "$CI_OK" '.jobs[]? | (.conclusion // "") as $c | select($c != "" and ($c == "success" or $c == "skipped" or $c == "neutral" | not)) | "request-gate-review:     \(.name): \(.conclusion)"' 2>/dev/null || true)"
+		[ -n "$jobs" ] && echo "$jobs" >&2
+		echo "request-gate-review:   if a job died in setup (runner, network, image build) rather than in the code: gh run rerun $id --failed, then run this again" >&2
+	done < <(printf '%s' "$1" | jq -r ".[] | select(.status == \"completed\" and ((.conclusion // \"\") as \$c | $CI_OK | not)) | [(.id | tostring), .name, (.conclusion // \"unknown\")] | @tsv" 2>/dev/null || true)
+}
+
+# The PR head is re-read when CI passes: a push during the wait means the
+# green CI belongs to a commit that is no longer the head.
+head_moved() {
+	local now_sha
+	now_sha="$(gh pr view "$pr" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "$head_sha")"
+	if [ -n "$now_sha" ] && [ "$now_sha" != "$head_sha" ]; then
+		ci_status=head-moved
+		echo "request-gate-review: the PR head moved from ${head_sha:0:7} to ${now_sha:0:7} during the CI wait — nothing is requested; run again for the new head" >&2
+		return 0
+	fi
+	return 1
+}
+
+# Waits until the CI of the PR's head has finished. Sets ci_status and
+# returns 0 only when it passed. The workflow runs of the head sha decide
+# while any exists (queued ones included); without any, the PR's checks
+# (`gh pr checks`, bucket = pass, fail, pending, skipping, cancel) do, for
+# repositories whose CI is not GitHub Actions. The budget is counted in
+# sleeps, like the confirmation polls.
 wait_for_ci() {
-	local waited=0 seen=0 out rc counts total pending failed
-	echo "request-gate-review: waiting for the checks of PR #$pr to finish (up to ${ci_timeout}s)"
+	local waited=0 seen=0 runs counts total pending failed out rc=0
+	echo "request-gate-review: waiting for the CI of PR #$pr (head ${head_sha:0:7}) to finish (up to ${ci_timeout}s)"
 	while :; do
-		rc=0
-		out="$(gh pr checks "$pr" --json name,bucket 2>&1)" || rc=$?
-		# gh exits non-zero while checks are pending or failing, so the exit
-		# status says nothing here; only parsable JSON counts.
-		counts="$(printf '%s' "$out" | jq -r 'if type == "array" then "\(length) \([.[] | select(.bucket == "pending")] | length) \([.[] | select(.bucket == "fail" or .bucket == "cancel")] | length)" else empty end' 2>/dev/null || true)"
+		runs="$(ci_runs)"
+		counts="$(printf '%s' "$runs" | jq -r "if type == \"array\" and length > 0 then \"\(length) \([.[] | select(.status != \"completed\")] | length) \([.[] | select(.status == \"completed\" and ((.conclusion // \"\") as \$c | $CI_OK | not))] | length)\" else empty end" 2>/dev/null || true)"
 		if [ -n "$counts" ]; then
 			set -- $counts
 			total="$1" pending="$2" failed="$3"
-			[ "$total" -gt 0 ] && seen=1
+			seen=1
 			if [ "$failed" -gt 0 ]; then
 				ci_status=failed
 				echo "request-gate-review: CI failed — nothing is requested:" >&2
-				printf '%s' "$out" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "request-gate-review:   \(.name) (\(.bucket))"' >&2 2>/dev/null || true
+				report_failed_runs "$runs"
 				return 1
 			fi
-			if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+			if [ "$pending" -eq 0 ]; then
+				head_moved && return 1
 				ci_status=passed
-				echo "request-gate-review: CI passed ($total checks)"
+				echo "request-gate-review: CI passed ($total workflow run(s) on ${head_sha:0:7})"
 				return 0
+			fi
+		else
+			rc=0
+			out="$(gh pr checks "$pr" --json name,bucket 2>&1)" || rc=$?
+			# gh exits non-zero while checks are pending or failing, so the exit
+			# status says nothing here; only parsable JSON counts.
+			counts="$(printf '%s' "$out" | jq -r 'if type == "array" then "\(length) \([.[] | select(.bucket == "pending")] | length) \([.[] | select(.bucket == "fail" or .bucket == "cancel")] | length)" else empty end' 2>/dev/null || true)"
+			if [ -n "$counts" ]; then
+				set -- $counts
+				total="$1" pending="$2" failed="$3"
+				[ "$total" -gt 0 ] && seen=1
+				if [ "$failed" -gt 0 ]; then
+					ci_status=failed
+					echo "request-gate-review: CI failed — nothing is requested:" >&2
+					printf '%s' "$out" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "request-gate-review:   \(.name) (\(.bucket))"' >&2 2>/dev/null || true
+					return 1
+				fi
+				if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+					head_moved && return 1
+					ci_status=passed
+					echo "request-gate-review: CI passed ($total checks)"
+					return 0
+				fi
 			fi
 		fi
 		if [ "$seen" -eq 0 ] && [ "$waited" -ge "$CI_APPEAR" ]; then
 			ci_status=none
-			echo "request-gate-review: no check appeared on PR #$pr within ${CI_APPEAR}s (last gh output, exit $rc: $out) — nothing is requested" >&2
+			echo "request-gate-review: no workflow run and no check appeared on PR #$pr within ${CI_APPEAR}s (last gh pr checks output, exit $rc: $out) — nothing is requested" >&2
 			return 1
 		fi
 		if [ "$waited" -ge "$ci_timeout" ]; then
 			ci_status=timeout
-			echo "request-gate-review: checks were still running after ${ci_timeout}s — nothing is requested" >&2
+			echo "request-gate-review: CI was still running after ${ci_timeout}s — nothing is requested" >&2
 			return 1
 		fi
 		sleep "$CI_STEP"
@@ -239,9 +314,6 @@ if [ "$wait_ci" -eq 1 ]; then
 	wait_for_ci || finish 3
 fi
 
-slug="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
-owner="${slug%%/*}"
-repo="${slug#*/}"
 # request_time is for confirming Copilot's own registration (taken right
 # before the requests, or an older still-pending request could be mistaken
 # for this one); T is only what gets printed for gate-threads.sh and is the
@@ -249,7 +321,6 @@ repo="${slug#*/}"
 # can't just be "now" here.
 request_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 T="${since:-$request_time}"
-head_sha="$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')"
 
 # Seconds to look for confirmation evidence after each request method, the
 # interval between looks, and the total budget from the first attempt

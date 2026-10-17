@@ -56,6 +56,11 @@ EOS
 #                          pass | fail | none (no checks: gh's error) | pending (forever)
 #   FAKE_CI_PENDING        number of `gh pr checks` calls that report a check still running
 #   FAKE_CI_EARLY_FAIL     1: while pending, another check has already failed
+#   FAKE_RUNS              workflow runs of the head (`gh api .../actions/runs?head_sha=`) from the
+#                          (FAKE_RUNS_PENDING+1)th call on: none (default: no run, so `gh pr checks`
+#                          decides) | pass (one success, one skipped) | fail (one failure, run 77)
+#   FAKE_RUNS_PENDING      number of runs calls that report the run still queued
+#   FAKE_HEAD_MOVES_TO     sha: from the 2nd `gh pr view` on, the PR head is this (a push during the wait)
 cat > "$W/bin/gh" <<'EOS'
 #!/usr/bin/env bash
 S="$FAKE_STATE"
@@ -66,7 +71,26 @@ register() { touch "$S/pending"; now > "$S/event"; }
 
 case "$1 $2" in
 	"repo view") echo "o/r"; exit 0 ;;
-	"pr view") echo "$FAKE_HEAD"; exit 0 ;;
+	"pr view")
+		n="$(count prview)"
+		if [ -n "${FAKE_HEAD_MOVES_TO:-}" ] && [ "$n" -ge 2 ]; then echo "$FAKE_HEAD_MOVES_TO"; else echo "$FAKE_HEAD"; fi
+		exit 0 ;;
+	"api repos/"*)
+		log "$1 $2"
+		n="$(count runs)"
+		mode="${FAKE_RUNS:-none}"
+		[ "$mode" != none ] && [ "$n" -le "${FAKE_RUNS_PENDING:-0}" ] && mode=queued
+		case "$mode" in
+			none) echo '{"total_count":0,"workflow_runs":[]}' ;;
+			queued) echo '{"total_count":1,"workflow_runs":[{"id":77,"name":"CI","status":"queued","conclusion":null}]}' ;;
+			pass) echo '{"total_count":2,"workflow_runs":[{"id":77,"name":"CI","status":"completed","conclusion":"success"},{"id":78,"name":"Docs","status":"completed","conclusion":"skipped"}]}' ;;
+			fail) echo '{"total_count":1,"workflow_runs":[{"id":77,"name":"CI","status":"completed","conclusion":"failure"}]}' ;;
+		esac
+		exit 0 ;;
+	"run view")
+		log "$@"
+		echo '{"jobs":[{"name":"PHPCS","conclusion":"success"},{"name":"PHPUnit (PHP 8.3, WC 10.0, HPOS off)","conclusion":"failure"},{"name":"E2E","conclusion":"skipped"}]}'
+		exit 0 ;;
 	"pr checks")
 		log "$@"
 		n="$(count checks)"
@@ -325,7 +349,44 @@ check "leftover pending + accepted REST re-request: exit 0 on the review" rc_is 
 check "explains why the unconfirmed re-request is waited on" has "already pending before this run and the re-request was accepted"
 check "COPILOT=responded" has "^COPILOT=responded$"
 
-echo "== --wait-ci: checks finish green, then the request goes out"
+echo "== --wait-ci: the workflow run of the head is waited on, even while only queued"
+FAKE_RUNS=pass FAKE_RUNS_PENDING=2 FAKE_CI=none FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=2 run 5 --copilot-only --wait-ci --timeout 5
+check "exit 0" rc_is 0
+check "CI=passed" has "^CI=passed$"
+check "polled the runs until none was pending (3 calls)" call_count "actions/runs" 3
+check "a queued run is a run: gh pr checks is not consulted" not_called "pr checks"
+check "waited 20s between polls" call_count "sleep 20" 2
+check "a skipped run does not hold the wait" has "CI passed (2 workflow run(s)"
+check "the run is waited on before Copilot is asked" called_before "actions/runs" "pr edit"
+check "DONE" has "^DONE$"
+
+echo "== --wait-ci: a failed run stops before any request and names the failed jobs"
+FAKE_RUNS=fail run 5 --request-codex --wait-ci --timeout 5
+check "exit 3" rc_is 3
+check "CI=failed" has "^CI=failed$"
+check "names the run" has "CI (failure, run 77)"
+check "names the failed job, not the passed or skipped ones" has "PHPUnit (PHP 8.3, WC 10.0, HPOS off): failure"
+check "passed jobs are not listed" hasnt "PHPCS: success"
+check "points at the rerun for a setup failure" has "gh run rerun 77 --failed"
+check "Copilot is not asked" not_called "pr edit"
+check "Codex is not asked" not_called "pr comment"
+check "no DONE" hasnt "^DONE$"
+
+echo "== --ci-timeout: a run still queued -> exit 3"
+FAKE_RUNS=pass FAKE_RUNS_PENDING=99 run 5 --copilot-only --ci-timeout 40
+check "exit 3" rc_is 3
+check "CI=timeout" has "^CI=timeout$"
+check "bounded by --ci-timeout (2 x 20s)" call_count "sleep 20" 2
+check "Copilot is not asked" not_called "pr edit"
+
+echo "== --wait-ci: the PR head moved during the wait -> exit 3"
+FAKE_RUNS=pass FAKE_HEAD_MOVES_TO="$OLD" run 5 --copilot-only --wait-ci
+check "exit 3" rc_is 3
+check "CI=head-moved" has "^CI=head-moved$"
+check "names both heads" has "moved from ${HEAD:0:7} to ${OLD:0:7}"
+check "Copilot is not asked" not_called "pr edit"
+
+echo "== --wait-ci: checks finish green, then the request goes out (no Actions run: gh pr checks decides)"
 FAKE_CI_PENDING=2 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=2 run 5 --copilot-only --wait-ci --timeout 5
 check "exit 0" rc_is 0
 check "CI=passed" has "^CI=passed$"
@@ -357,6 +418,7 @@ FAKE_CI=none run 5 --copilot-only --wait-ci
 check "exit 3" rc_is 3
 check "CI=none" has "^CI=none$"
 check "gh's own message is shown" has "no checks reported"
+check "reported as neither run nor check" has "no workflow run and no check appeared"
 check "gave up after the 180s appear budget (9 x 20s)" call_count "sleep 20" 9
 check "Copilot is not asked" not_called "pr edit"
 

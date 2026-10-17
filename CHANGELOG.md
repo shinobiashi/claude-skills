@@ -170,6 +170,18 @@
   なければ `OK`、あればその sha を `WARN` に並べる。手元の 31 リポジトリで修正前後の `detect` を比べ、変わったのは
   jp4wc-pro の 3 行、wc4jp-gmo-pg（2 チェックアウト）の `WC_AM_Client` 行、Paygent の `class-wc-gateway-paygent.php`
   の `@version`（毎リリース一緒に上げてきた行）だけだった。シナリオテスト 87 件（新しい 10 件は修正前のスクリプトで失敗）。
+- drift の再同期（`dev-cycle`）: 2026-10-12 に installed 側（`~/.claude/skills/`）だけを直接編集していた変更をソースへ
+  取り込んだ（`install.sh --check` で検出。下の 2026-09-22〜24 の再同期と同じ事故）。ソースにしか無い変更は無く、
+  installed 側はソースに次の修正を足したものだった。
+  - `request-gate-review.sh --wait-ci` が head の sha の workflow run（`gh api repos/…/actions/runs?head_sha=`）を待つ。
+    push の登録直後から queued として見えるので、ランナー待ちを「CI が始まっていない」と読まない（saai-signal-mail PR #8 で
+    20 分の queued を `gh pr checks` の「no checks」で取り逃した）。run の無い repo だけ `gh pr checks` に切り替える。
+    `--ci-timeout` の既定を 480 秒から 2,700 秒にした。失敗した run のジョブ名と `gh run rerun <id> --failed` を出す。
+    待っている間に head が動いたら `CI=head-moved` の exit 3 にした
+  - `gate-round.sh publish` が、PR の head が push に追いつくのを最長 60 秒待つ（saai-signal-mail PR #2 で、push 直後の
+    publish が 3 回とも「local HEAD is not the PR head」で拒まれた）
+  - SKILL.md の Step 6 / 7 の timeout（`--wait-ci` 込みで 5400000ms）と説明を更新した
+  - テストはソース上で test-request-gate-review 133 件、test-gate-round 52 件がすべて pass した
 - `woo-marketplace-submission` / `woo-marketplace-extension`: `changelog.txt` の例の見出しが WordPress.org の readme.txt 風
   （`= 1.0.0 - 2026-06-01 =`）になっていた。WooCommerce.com の公式書式は `YYYY-MM-DD - version x.y.z`（日付が先）で、
   書式違いは「The `changelog.txt` file provided does not match the expected format」としてアップロード拒否の理由になる。

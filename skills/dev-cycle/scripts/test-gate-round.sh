@@ -30,9 +30,21 @@ HEAD_SHA="$(git rev-parse HEAD)"
 # ---- fakes
 mkdir -p "$W/bin"
 LOG="$W/calls.log"
+# `sleep` is replaced so publish's wait for the PR head passes instantly; its
+# calls go to their own log so the exact-order checks on $FAKE_LOG stay clean.
+cat > "$W/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+echo "sleep $*" >> "$FAKE_LOG.sleep"
+exit 0
+EOF
 cat > "$W/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1 $2" = "pr view" ]; then echo "${FAKE_PR_HEAD:-}"; exit 0; fi
+if [ "$1 $2" = "pr view" ]; then
+  # FAKE_PR_HEAD_LAG: that many `pr view` calls still answer the old head (GitHub catching up).
+  n=$(( $(cat "$FAKE_LOG.prview" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_LOG.prview"
+  if [ -n "${FAKE_PR_HEAD_LAG:-}" ] && [ "$n" -le "$FAKE_PR_HEAD_LAG" ]; then echo "0000000000000000000000000000000000000000"; else echo "${FAKE_PR_HEAD:-}"; fi
+  exit 0
+fi
 if [ "$1 $2" = "pr list" ]; then
   # FAKE_PR_LIST holds what the --jq filter would print: "<number> <state>" lines.
   [ -z "${FAKE_FAIL_PR_LIST:-}" ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }
@@ -54,7 +66,7 @@ if [ "$1" = "done" ] || [ "$1" = "reply" ]; then
 fi
 exit 0
 EOF
-chmod +x "$W/bin/gh" "$W/bin/gate-threads.sh"
+chmod +x "$W/bin/gh" "$W/bin/gate-threads.sh" "$W/bin/sleep"
 export PATH="$W/bin:$PATH" FAKE_LOG="$LOG" GATE_THREADS="$W/bin/gate-threads.sh"
 
 printf 'reply one\n' > "$W/r1.md"
@@ -62,7 +74,8 @@ printf 'reply two\n' > "$W/r2.md"
 printf 'summary\n' > "$W/sum.md"
 : > "$W/empty.md"
 
-run() { : > "$LOG"; OUT="$("$SCRIPT" "$@" 2>&1)"; RC=$?; }
+run() { : > "$LOG"; rm -f "$LOG.sleep" "$LOG.prview"; OUT="$("$SCRIPT" "$@" 2>&1)"; RC=$?; }
+sleeps() { cat "$LOG.sleep" 2>/dev/null; }
 calls() { cat "$LOG" 2>/dev/null; }
 
 echo "== push"
@@ -157,9 +170,20 @@ run publish 3 --summary "$W/sum.md" --bogus
 
 FAKE_PR_HEAD="0000000000000000000000000000000000000000" run publish 3 --summary "$W/sum.md" --done "PRRT_a=$W/r1.md"
 [ "$RC" -ne 0 ] && [ -z "$(calls)" ] && echo "$OUT" | grep -q "push first"; check "unpushed HEAD rejected (nothing posted)" $?
+[ "$(sleeps | grep -c '^sleep 5')" -eq 12 ]; check "gave up after the 60s head budget (12 x 5s)" $?
 
 FAKE_PR_HEAD="0000000000000000000000000000000000000000" run publish 3 --summary "$W/sum.md" --done "PRRT_a=$W/r1.md" --allow-unpushed
 [ "$RC" -eq 0 ]; check "--allow-unpushed overrides the pushed-HEAD check" $?
+
+echo "== publish: the PR head lags the push for a few seconds"
+FAKE_PR_HEAD_LAG=2 run publish 3 --summary "$W/sum.md" --done "PRRT_a=$W/r1.md"
+[ "$RC" -eq 0 ]; check "publish waits for the PR head to catch up instead of refusing" $?
+[ "$(sleeps | grep -c '^sleep 5')" -eq 2 ]; check "waited 5s twice (one per stale answer)" $?
+calls | grep -q "gate-threads done 3 PRRT_a"; check "then posts as usual" $?
+echo "$OUT" | grep -q "waiting for GitHub to catch up"; check "says what it is waiting for" $?
+
+run publish 3 --summary "$W/sum.md" --done "PRRT_a=$W/r1.md"
+[ -z "$(sleeps)" ]; check "no wait when the PR head already matches" $?
 
 echo "== publish: order and content"
 run publish 3 --summary "$W/sum.md" --done "PRRT_a=$W/r1.md" --hold "PRRT_b=$W/r2.md" --since 2026-09-20T00:00:00Z
