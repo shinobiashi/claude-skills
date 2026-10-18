@@ -208,19 +208,21 @@ backlog 数と `docs/reviews/<ブランチ>/R*.md` への参照)を加える。�
 
 ### Step 5. CI 待ち
 
-Bash を `run_in_background` で実行する(前面の `sleep` は使えない。完了時に1回通知が来る):
+依頼しない CI 待ち(最終ラウンドの修正の後、Step 8 の記録用 `docs:` コミットの後)は、本スキル同梱の
+`scripts/request-gate-review.sh` の `--ci-only` で待つ。Bash `run_in_background`(前面の `sleep` は使えない。完了時に1回通知が来る)、
+timeout は `--ci-timeout`(既定 2,700 秒)+ 1 分で **2800000ms**。出力はファイルに書き出し、終了コードを取ってから読む:
 
 ```bash
-N=<PR番号>
-until gh pr checks "$N" --json name --jq 'length' 2>/dev/null | grep -qE '^[1-9]'; do sleep 15; done
-gh pr checks "$N" --watch --fail-fast
+R=<Base directory for this skill>/scripts/request-gate-review.sh
+"$R" <N> --ci-only > <ログ> 2>&1; echo "EXIT=$?" >> <ログ>
 ```
 
-timeout は 600000ms。
+PR の現在の head の **workflow run を sha で**追い(queued の run も数える)、すべて完了して green なら `CI=passed` と `DONE` で exit 0、
+red・取消・run も check も現れない・`--ci-timeout` 超過・待つ間の head の移動は exit 3(何も依頼しない。Step 6 の `--wait-ci` と同じ判定)。
+**手書きの until ループに戻さない**: wcpdf-jp-v1 PR #33 では `gh run list --commit` に短い sha を渡し(完全な sha にしか一致しない)、
+とっくに green の CI を待ち続けた。
 
-Step 6 の依頼の直前の CI 待ちは、`request-gate-review.sh` の `--wait-ci` でまとめられる(下記。CI が
-green になってから依頼し、red なら何も依頼せずに exit 3 で返る)。その場合この節の until ループは要らない。
-最終ラウンドの修正の後(再依頼しない)と、`--wait-ci` を使わない時はこの節のとおり待つ。
+Step 6 の依頼の直前の CI 待ちは、`--wait-ci` で依頼とまとめる(下記。CI が green になってから依頼し、red なら何も依頼せずに exit 3 で返る)。
 
 - green → Step 6(または最終ラウンド後なら Step 8)
 - red → `gh run view <run-id> --log-failed` で原因を確認し、ローカルで品質チェックを実行する。
@@ -253,6 +255,7 @@ R=<Base directory for this skill>/scripts/request-gate-review.sh
 "$R" <N> --since <T> --codex-only           # Copilot が収束済み
 "$R" <N> --since <T> --wait-only [--copilot-only]   # 依頼せず待つだけ(exit 2 の後にユーザーが UI から依頼した時、exit 1 の後に待ち直す時)
 "$R" <N> --since <T> --wait-ci [...]        # 先に PR の CI の完了を待ち、green の時だけ依頼する(Step 5 の待ちを兼ねる)
+"$R" <N> --ci-only                         # CI の完了だけを待つ。何も依頼せず、bot も待たない(Step 5)
 ```
 
 Codex の自動レビュー(push で自動起動する設定)が有効かどうかは CLAUDE.md の記載や過去 PR の

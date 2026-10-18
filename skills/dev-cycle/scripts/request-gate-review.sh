@@ -64,11 +64,18 @@
 #   run stops the wait before any request: a bot asked to review a commit
 #   whose CI failed reviews code that is about to change. "No run and no
 #   check ever appeared" is reported as its own failure, never as "passed".
+# - `--ci-only` is the same CI wait with nothing requested and no bot waited
+#   on: for the push after the last gate round, and for the record commits
+#   (Step 5, Step 8). A hand-written loop there passed a short sha to
+#   `gh run list --commit`, which matches only the full sha, and kept
+#   waiting for a CI that had long been green (wcpdf-jp-v1 PR #33,
+#   2026-10-18).
 #
 # Usage:
 #   request-gate-review.sh <PR> [--copilot-only|--codex-only] [--request-codex]
 #                          [--wait-only] [--timeout SECONDS] [--since TIMESTAMP]
 #                          [--wait-ci] [--ci-timeout SECONDS]
+#   request-gate-review.sh <PR> --ci-only [--ci-timeout SECONDS]
 #
 #   --wait-only   request nothing; only wait for the responses. For after a
 #                 manual request in the UI (exit 2), or to resume a wait that
@@ -88,6 +95,12 @@
 #                 (default 2700s = 45 min: a 15-minute pipeline plus a runner
 #                 backlog; giving --ci-timeout implies --wait-ci). Size the
 #                 outer background timeout to --ci-timeout + 5 min + --timeout.
+#   --ci-only     only the --wait-ci wait: request nothing, wait for no bot.
+#                 Exit 0 with CI=passed and DONE when the CI of the head
+#                 passed, 3 otherwise (as --wait-ci). Not combined with
+#                 --copilot-only, --codex-only, --request-codex or
+#                 --wait-only (exit 64). Size the outer background timeout
+#                 to --ci-timeout + 1 min.
 #
 # Prints `T=<UTC timestamp>` once the requests are out — record it, it is
 # what `gate-threads.sh list/status/bodies` needs to identify this round's
@@ -106,7 +119,8 @@
 #   CI=passed|failed|none|timeout|head-moved|not-waited
 #
 # Exit status:
-#   0  every bot being waited on responded to the current head
+#   0  every bot being waited on responded to the current head (--ci-only:
+#      the CI of the head passed)
 #   1  the request was made and confirmed, but a bot did not respond within
 #      --timeout (default 900s). Not "no findings": rerun with --wait-only
 #      later, or proceed and re-check with fix-copilot-review afterwards
@@ -140,13 +154,16 @@ timeout=900
 since=""
 wait_ci=0
 ci_timeout=2700
+ci_only=0
+bot_flags=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--copilot-only) want_codex=0 ;;
-		--codex-only) want_copilot=0 ;;
-		--request-codex) request_codex=1 ;;
-		--wait-only) wait_only=1 ;;
+		--copilot-only) want_codex=0; bot_flags="$bot_flags $1" ;;
+		--codex-only) want_copilot=0; bot_flags="$bot_flags $1" ;;
+		--request-codex) request_codex=1; bot_flags="$bot_flags $1" ;;
+		--wait-only) wait_only=1; bot_flags="$bot_flags $1" ;;
+		--ci-only) ci_only=1; wait_ci=1 ;;
 		--timeout)
 			shift
 			timeout="${1:?--timeout requires a value}"
@@ -168,6 +185,11 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+
+if [ "$ci_only" -eq 1 ] && [ -n "$bot_flags" ]; then
+	echo "request-gate-review: --ci-only requests nothing and waits for no bot; drop$bot_flags" >&2
+	exit 64
+fi
 
 if [ "$want_copilot" -eq 0 ] && [ "$want_codex" -eq 0 ]; then
 	echo "request-gate-review: --copilot-only and --codex-only together wait for nothing" >&2
@@ -313,6 +335,9 @@ wait_for_ci() {
 if [ "$wait_ci" -eq 1 ]; then
 	wait_for_ci || finish 3
 fi
+
+# --ci-only: the CI wait was all that was asked for.
+[ "$ci_only" -eq 1 ] && finish 0
 
 # request_time is for confirming Copilot's own registration (taken right
 # before the requests, or an older still-pending request could be mistaken

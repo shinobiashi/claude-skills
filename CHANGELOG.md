@@ -5,6 +5,13 @@
 ## [Unreleased]
 
 ### Added
+- `dev-cycle`: `request-gate-review.sh --ci-only [--ci-timeout SECONDS]`。`--wait-ci` と同じ CI 待ち（現 HEAD の sha の workflow run を
+  20 秒ごと、run が無ければ `gh pr checks`）だけをして、何も依頼せず bot も待たない。green なら `CI=passed` と `DONE` で exit 0、
+  red・取消・run も check も現れない・`--ci-timeout` 超過・head の移動は exit 3。`--copilot-only`・`--codex-only`・`--request-codex`・
+  `--wait-only` と一緒なら exit 64。SKILL.md の Step 5（最終ラウンドの後と Step 8 の記録の後の CI 待ち）を、手書きの until ループから
+  これに置き換えた。きっかけは wcpdf-jp-v1 PR #33（2026-10-18）: 手書きのループが `gh run list --commit` に短い sha を渡し
+  （完全な sha にしか一致しない）、とっくに green の CI を待ち続けた。シナリオテスト 133 → 161 件。
+  配置済みコピーを先に直してしまったので、ソースへ写して `install.sh --check` で `[ok]` を確かめた
 - `wporg-screenshots`: 新規。wordpress.org の readme に載せるスクリーンショットを、wp-env の tests サイトで Playwright（ヘッドレスの
   Chrome）を使って撮り直す。`scripts/capture.sh`（`shoot` / `status` / `cleanup`）が、readme の `== Screenshots ==` のキャプションと枚数を
   照合し、build → tests サイトの準備 → 撮影 → 片付けを行う。撮る画面はプロジェクトの `.claude/wporg-screenshots/shots.json` に書く

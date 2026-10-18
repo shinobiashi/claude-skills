@@ -429,6 +429,39 @@ check "CI=timeout" has "^CI=timeout$"
 check "--ci-timeout implies --wait-ci and bounds the wait (2 x 20s)" call_count "sleep 20" 2
 check "Copilot is not asked" not_called "pr edit"
 
+echo "== --ci-only: waits for the run of the head, then stops without asking anyone"
+FAKE_RUNS=pass FAKE_RUNS_PENDING=2 FAKE_CI=none run 5 --ci-only
+check "exit 0" rc_is 0
+check "CI=passed" has "^CI=passed$"
+check "polled the runs until none was pending (3 calls)" call_count "actions/runs" 3
+check "Copilot is not asked" not_called "pr edit"
+check "Codex is not asked" not_called "pr comment"
+check "no T (nothing was requested)" hasnt "^T="
+check "no response wait" not_polled
+check "COPILOT=not-waited" has "^COPILOT=not-waited$"
+check "CODEX=not-waited" has "^CODEX=not-waited$"
+check "DONE" has "^DONE$"
+
+echo "== --ci-only: a failed run -> exit 3, no DONE"
+FAKE_RUNS=fail run 5 --ci-only
+check "exit 3" rc_is 3
+check "CI=failed" has "^CI=failed$"
+check "no DONE" hasnt "^DONE$"
+
+echo "== --ci-only: --ci-timeout bounds the wait"
+FAKE_RUNS=pass FAKE_RUNS_PENDING=99 run 5 --ci-only --ci-timeout 40
+check "exit 3" rc_is 3
+check "CI=timeout" has "^CI=timeout$"
+check "bounded by --ci-timeout (2 x 20s)" call_count "sleep 20" 2
+
+echo "== --ci-only with a bot flag is rejected (nothing is asked)"
+for flag in --wait-only --request-codex --copilot-only --codex-only; do
+	run 5 --ci-only "$flag"
+	check "--ci-only $flag rejected" rc_is 64
+	check "--ci-only $flag: names the flag" has "drop $flag"
+	check "--ci-only $flag: nothing asked" not_called "gh"
+done
+
 echo "== without --wait-ci the checks are not looked at"
 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=1 run 5 --copilot-only --timeout 5
 check "gh pr checks is not called" not_called "pr checks"
