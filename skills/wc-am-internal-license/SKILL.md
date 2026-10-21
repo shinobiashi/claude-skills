@@ -1,6 +1,6 @@
 ---
 name: wc-am-internal-license
-description: WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、「社内ライセンス」の mu-plugin を生成するスキル。wp-config.php の定数に置いた社内用アカウントのユーザーライセンスキー（旧称 Master API Key）で販売サイトに自動で有効化するので、画面でライセンスキーを入れなくても、未有効化の通知や「Auto-updates unavailable.」が出ず、顧客と同じ経路で更新が届く。商品 ID・販売サイトの URL などはプラグインの `new WC_AM_Client_X_Y_Z(...)` から読み取り、wp-env での確認（販売サイトのモックで 8 つの場面）までスクリプトで行う。「ライセンスキー無しで使えるように」「社内用ライセンスの mu-plugin」「自社・管理先のサイトでキーを入れずに更新したい」「ライセンスの警告を消したい」「wc-am-internal-license」などと言われたら使う。
+description: WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、「社内ライセンス」の mu-plugin を生成するスキル。wp-config.php の定数に置いた社内用アカウントのユーザーライセンスキー（旧称 Master API Key）で販売サイトに自動で有効化するので、画面でライセンスキーを入れなくても、未有効化の通知や「Auto-updates unavailable.」が出ず、顧客と同じ経路で更新が届く。商品 ID・販売サイトの URL などはプラグインの `new WC_AM_Client_X_Y_Z(...)` から読み取り、wp-env での確認（販売サイトのモックで 8 つの場面）までスクリプトで行う。wp-config.php を触れない・触りたくないサイト向けに、定数だけを定義する「キーのファイル」（別の mu-plugin）の雛形も出せる。「ライセンスキー無しで使えるように」「社内用ライセンスの mu-plugin」「自社・管理先のサイトでキーを入れずに更新したい」「ライセンスの警告を消したい」「wc-am-internal-license」などと言われたら使う。
 ---
 
 # wc-am-internal-license — 社内ライセンスの mu-plugin を生成する
@@ -20,7 +20,7 @@ python3 -I "$S/generate.py" --plugin-dir . --product-id 188 --out tools/mu-plugi
   instance・期限後は空文字になる（cart-bridge-jp で API Manager 3.6.0・3.8.1 を実測した。`~/Dev/cart-bridge-jp/docs/03-design-decisions.md` の R3-8c）。
   クライアント側の細工だけで「キー無しでダウンロード」はできない
 - そこで、販売サイトに社内用の顧客アカウントを作って製品の 0 円の注文を入れ、そのアカウントの **ユーザーライセンスキー**を各サイトの
-  `wp-config.php` の定数に置く。mu-plugin はそのキーでサイトを有効化し、キーを画面・DB に出さない
+  `wp-config.php` の定数（またはキーのファイル）に置く。mu-plugin はそのキーでサイトを有効化し、キーを画面・DB に出さない
 - ユーザーライセンスキーは、API Manager が顧客アカウントごとに 1 つ発行し、そのアカウントが購入したすべての製品の有効化に使えるキー。
   API Manager 3.8 で表示名が変わった（旧称 **Master API Key**。英語の画面では User license key、内部の名前は今も `master_api_key`）。
   注文ごとの「プロダクトライセンスキー」でもその製品には使えるが、同じ定数を販売サイトの他の製品と共有するならユーザーライセンスキーにする
@@ -67,6 +67,17 @@ python3 -I "$S/generate.py" --plugin-dir . [--product-id N] --out tools/mu-plugi
 定数の名前は既定で販売サイトのホストから作る（`wc4jp-pro.work` → `WC4JP_PRO_INTERNAL_API_KEY`。同じ販売サイトの製品は同じ定数を共有する）。
 生成したファイルは `php -l` を通してから書く。
 
+wp-config.php を編集しないサイトがあるなら、`--key-file FILE` でキーのファイルも出す（`--check` と一緒でもよい）。
+
+```bash
+python3 -I "$S/generate.py" --plugin-dir . [--product-id N] --out tools/mu-plugins/<slug>-internal-license.php --check --key-file <リポジトリの外>/<slug>-internal-license-key.php
+```
+
+- 中身は `if ( ! defined( '<定数>' ) ) { define( '<定数>', '' ); }` だけの mu-plugin。キーは空で出すので、ユーザーがエディタで貼る。
+  スクリプトにもチャットにもキーを渡さない
+- 書き先は**リポジトリの外の新しいファイル**だけ。`--plugin-dir` の中と、既にあるファイル（キーを貼った後かもしれない）は止める（exit 2）
+- キーが空のままなら、本体の mu-plugin は定数が無いのと同じく何もしない。`wp-config.php` に定数があれば、そちらが勝つ
+
 ### 3. リポジトリに置く（コード扱い。ブランチと PR で）
 
 - 置き場所は `tools/mu-plugins/`。`.distignore` に `/tools/` を足し、配布 zip に入れない
@@ -79,15 +90,17 @@ python3 -I "$S/generate.py" --plugin-dir . [--product-id N] --out tools/mu-plugi
 
 ```bash
 M=$(mktemp -d)
-python3 -I "$S/generate.py" --plugin-dir . [--product-id N] --out tools/mu-plugins/<slug>-internal-license.php --check --verify-mock "$M/0-mock.php"
-bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.php --mock "$M/0-mock.php"
+python3 -I "$S/generate.py" --plugin-dir . [--product-id N] --out tools/mu-plugins/<slug>-internal-license.php --check --verify-mock "$M/0-mock.php" --key-file "$M/key.php"
+bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.php --mock "$M/0-mock.php" --key-file "$M/key.php"
 ```
 
 - wp-env の development サイトが起動している必要がある（`npx wp-env start`）。管理者は既定で `admin` / `password`（`--user`・`--password`）
 - モック（`--verify-mock`）は、ダミーのキーで定数を定義し、販売サイトへの要求をすべて `pre_http_request` で答える一時 mu-plugin。**本物の販売サイトへは出ない**
 - 場面は S0（mu-plugin 無し）・S1（有効化が通る）・S2（「同じ instance で有効化済み」と断られ、状態確認で通す）・S3（キーが通らない）・
   S5（販売サイトが有効化を消して 1 日たった → 状態確認で気付いて有効化し直す）・S6（ログインしていない `admin-post.php` への要求では有効化しない）・
-  S7（定数を後から読まれる mu-plugin で定義しても効く）・S4（定数が無い）。判定はサイトの言語に依らない印（設定画面へのリンク・自動更新の列・
+  S7（定数を後から読まれる mu-plugin で定義しても効く）・S4（定数が無い）。`--key-file` を渡すと、S7 はキーのファイルにダミーのキーを入れた写しで
+  確かめ、S8（キーのファイルを空のまま置く → 何もしない）が増える。`--key-file` はキーが空のままのファイルだけを受け付ける
+  （キーを貼ったファイルは exit 2。本物のキーを開発サイトへ写さない）。判定はサイトの言語に依らない印（設定画面へのリンク・自動更新の列・
   更新の行の `update-link`）と、このファイルの英語の文言で見る。mu-plugin 自身の要求は、キーが本文にあることでクライアントの要求と見分ける
 - 終わると（失敗・中断も）写したファイルと触った option・transient を消し、クライアントの option が前と同じかを確かめる。失敗したときは取得した HTML を残してパスを出す
 - 実際の zip のダウンロードと更新はしない（package の URL はモックの偽物）。本物の更新は、本番サイトに置いた後に次の版で確かめる
@@ -96,8 +109,10 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 
 - `wp-content/mu-plugins/` にファイルを写し、`wp-config.php` に `define( '<定数>', '<ユーザーライセンスキー>' );` を足す
   （`/* That's all, stop editing! */`〔日本語版は「編集が必要なのはここまでです」〕の行より上）
-- `wp-config.php` を編集できないホストでは、同じ `define` だけを書いた別の mu-plugin を置いてもよい。定数は `muplugins_loaded` で読むので、
-  ファイル名の順は問わない。そのファイルはキーを含むので、リポジトリにも配布物にも入れない
+- `wp-config.php` を編集できない・したくないサイトでは、手順 2 の `--key-file` で出したキーのファイルに、エディタでキーを貼って
+  `wp-content/mu-plugins/` に置く（`wp-config.php` は触らない）。定数は `muplugins_loaded` で読むので、ファイル名の順は問わない。
+  キーを貼ったファイルは、リポジトリにも配布物にも入れない。`wp-content` を git やデプロイツールで管理しているサイトでは、その管理対象から外す
+  （入れるとキーがリポジトリに残る。外さないとデプロイでファイルが消える）。止めるときはこのファイルを消す
 - 管理者が管理画面を 1 回開くと有効化される。プラグイン一覧の行に「Licensed with the internal key (mu-plugin)」が出ればよい
   （失敗するとプラグイン一覧と更新の画面にだけ理由を出し、1 時間おきに再試行する）
 - 定期購入の製品なら、キーが効くのは定期購入が「有効」か「キャンセル待ち」の間だけ。「保留」になると API Manager は有効化を消す
@@ -143,7 +158,9 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 ## テンプレートを直すとき
 
 1. `templates/internal-license.php`（と、必要なら `templates/verify-mock.php`）を直し、`scripts/generate.py` の `TEMPLATE_VERSION` を上げる
-   （クラス名 `AW_WC_AM_Internal_License_<版>` が変わり、版の違うファイルが同じサイトで並んでも衝突しない）
+   （クラス名 `AW_WC_AM_Internal_License_<版>` が変わり、版の違うファイルが同じサイトで並んでも衝突しない）。
+   キーのファイル（`templates/internal-license-key.php`）はクラスを持たず、リポジトリにも置かないので、直しても版は上げなくてよい。
+   ただし `define( '<定数>', '' );` の行の形は `verify-wp-env.sh` と `test-generate.sh` が探すので変えない
 2. `bash scripts/test-generate.sh`（生成のシナリオテスト）
 3. 使っているリポジトリで `generate.py ... --check` が差を出すので、生成し直して `verify-wp-env.sh` を流し、PR にする
 

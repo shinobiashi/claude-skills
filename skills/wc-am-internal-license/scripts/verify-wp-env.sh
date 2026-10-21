@@ -2,11 +2,12 @@
 # verify-wp-env.sh — Check a generated internal-license mu-plugin on the wp-env development site.
 #
 # Usage:
-#   verify-wp-env.sh --mu-plugin FILE --mock FILE [--repo DIR] [--url URL] [--mu-dir DIR]
+#   verify-wp-env.sh --mu-plugin FILE --mock FILE [--key-file FILE] [--repo DIR] [--url URL] [--mu-dir DIR]
 #                    [--user admin] [--password password]
 #
 #   --mu-plugin  the file generate.py wrote (e.g. tools/mu-plugins/<slug>-internal-license.php)
 #   --mock       the file generate.py --verify-mock wrote
+#   --key-file   the file generate.py --key-file wrote, with the key still empty (S7 then uses it, and S8 runs)
 #   --repo       plugin repository with .wp-env.json (default: the git top level of the current directory)
 #   --url        development site (default: http://localhost:<port in .wp-env.json>)
 #   --mu-dir     host path of the site's wp-content/mu-plugins (default: found from ~/.wp-env/*/docker-compose.yml)
@@ -14,25 +15,27 @@
 # Copies the mock (as 0-wcam-verify-mock.php) and the mu-plugin into mu-plugins, logs in, and runs eight
 # scenarios against the mock store: S0 no mu-plugin, S1 activation succeeds, S2 the store says "already
 # activated", S3 activation fails, S5 the store dropped the activation a day ago, S6 a logged-out request to
-# admin-post.php, S7 the constant comes from a later mu-plugin, S4 the constant is missing. Nothing goes to
-# the real store.
+# admin-post.php, S7 the constant comes from a later mu-plugin, S4 the constant is missing. With --key-file,
+# S7 loads the key file with the dummy key filled in, and S8 checks that the key file left empty does nothing.
+# Nothing goes to the real store.
 # On exit (also on failure or Ctrl-C) it removes the files it copied and the options and transients it touched,
 # then compares the client's options with what they were before.
 #
 # Exit status: 0 all checks passed, 1 a check failed, 2 bad input or the site is not reachable.
 set -uo pipefail
 
-MU_PLUGIN="" MOCK="" REPO="" URL="" MU_DIR="" USER_NAME="admin" PASSWORD="password"
+MU_PLUGIN="" MOCK="" KEY_FILE="" REPO="" URL="" MU_DIR="" USER_NAME="admin" PASSWORD="password"
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--mu-plugin) MU_PLUGIN="$2"; shift 2 ;;
 		--mock) MOCK="$2"; shift 2 ;;
+		--key-file) KEY_FILE="$2"; shift 2 ;;
 		--repo) REPO="$2"; shift 2 ;;
 		--url) URL="$2"; shift 2 ;;
 		--mu-dir) MU_DIR="$2"; shift 2 ;;
 		--user) USER_NAME="$2"; shift 2 ;;
 		--password) PASSWORD="$2"; shift 2 ;;
-		-h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,23p' "$0"; exit 0 ;;
 		*) echo "ERROR: unknown option $1" >&2; exit 2 ;;
 	esac
 done
@@ -70,6 +73,12 @@ KEY_CONSTANT="$(conf key_constant)"
 MOCK_KEY="$(sed -n "s/^const WCAM_MOCK_KEY = '\([A-Za-z0-9]*\)';\$/\1/p" "$MOCK")"
 [ -n "$PLUGIN_FILE" ] && [ -n "$PRODUCT_ID" ] && [ -n "$CLIENT_HAS_ID" ] && [ -n "$KEY_CONSTANT" ] || die "cannot read the settings block of $MU_PLUGIN"
 [ -n "$MOCK_KEY" ] || die "cannot read the dummy key from $MOCK"
+# The key file must be as generated: a real key pasted in it is never copied onto the development site.
+EMPTY_DEFINE="define( '$KEY_CONSTANT', '' );"
+if [ -n "$KEY_FILE" ]; then
+	[ -f "$KEY_FILE" ] || die "--key-file is not a file"
+	grep -qF -- "$EMPTY_DEFINE" "$KEY_FILE" || die "--key-file does not hold \"$EMPTY_DEFINE\"; pass the file generate.py --key-file wrote, with the key still empty"
+fi
 normalize() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[ _&?-]/_/g'; }
 if [ "$CLIENT_HAS_ID" = "true" ]; then DATA_KEY="wc_am_client_$(normalize "$PRODUCT_ID")"; else DATA_KEY="wc_am_client_$(normalize "$(dirname "$PLUGIN_FILE")")"; fi
 SETTINGS_PAGE="${SETTINGS_PAGE:-${DATA_KEY}_dashboard}"
@@ -246,12 +255,29 @@ page plugins.php s6 >/dev/null
 
 echo "S7 the constant comes from a mu-plugin that loads after this one (a host where wp-config.php cannot be edited)"
 reset success no-key
-printf "<?php\n// TEMPORARY (verify-wp-env.sh S7).\ndefine( '%s', '%s' );\n" "$KEY_CONSTANT" "$MOCK_KEY" >"$LATE_KEY"
+if [ -n "$KEY_FILE" ]; then
+	echo "  (the key file, with the dummy key pasted in)"
+	sed "s/$EMPTY_DEFINE/define( '$KEY_CONSTANT', '$MOCK_KEY' );/" "$KEY_FILE" >"$LATE_KEY"
+	grep -qF -- "'$MOCK_KEY'" "$LATE_KEY" || die "could not paste the dummy key into the copy of the key file"
+else
+	printf "<?php\n// TEMPORARY (verify-wp-env.sh S7).\ndefine( '%s', '%s' );\n" "$KEY_CONSTANT" "$MOCK_KEY" >"$LATE_KEY"
+fi
 P="$(page plugins.php s7)"
 rm -f "$LATE_KEY"
 expect no "no inactive notice" "$P" "$NOTICE"
 expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
 [ "$(count_requests activate)" = "1" ] && ok "it activates with the later constant" || bad "it activates with the later constant"
+
+if [ -n "$KEY_FILE" ]; then
+	echo "S8 the key file is in place with the key still empty"
+	reset success no-key
+	cp "$KEY_FILE" "$LATE_KEY"
+	P="$(page plugins.php s8)"
+	rm -f "$LATE_KEY"
+	expect yes "the client's inactive notice shows" "$P" "$NOTICE"
+	expect no "the row has no internal-key note" "$P" "[Ii]nternal key \\(mu-plugin\\)" row
+	[ "$(count_requests activate)" = "0" ] && ok "nothing is activated" || bad "nothing is activated"
+fi
 
 echo "S4 the mu-plugin is in place but the constant is missing"
 reset success no-key

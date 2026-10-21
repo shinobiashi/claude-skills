@@ -9,6 +9,8 @@ Usage:
 
 Overrides: --slug, --main-file, --title, --api-url, --key-constant, --settings-page, --package.
 --verify-mock FILE also writes a temporary mu-plugin that answers for the store on a development site.
+--key-file FILE also writes the key file: a second mu-plugin that defines the key constant (left empty for an
+editor) on a site where wp-config.php is not edited. It must be a new file outside --plugin-dir.
 
 Exit status: 0 written (or --check matched), 1 --check found a difference, 2 bad input.
 """
@@ -27,6 +29,7 @@ TEMPLATE_VERSION = "1.0.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "..", "templates", "internal-license.php")
 MOCK_TEMPLATE = os.path.join(HERE, "..", "templates", "verify-mock.php")
+KEY_TEMPLATE = os.path.join(HERE, "..", "templates", "internal-license-key.php")
 
 # Constructor arguments of WC_AM_Client 2.x, in order.
 ARG_NAMES = [
@@ -239,7 +242,18 @@ def build(opts):
         f"key constant : {key_constant}",
         f"settings page: {settings_page or '(client default)'}",
     ]
-    return values, slug, summary
+    return values, slug, plugin_dir, summary
+
+
+def check_key_file(path, plugin_dir):
+    """Refuse a key file that would overwrite a key or land in the plugin repository."""
+    target = os.path.realpath(os.path.abspath(path))
+    if os.path.lexists(path):
+        raise InputError(f"--key-file {path} already exists; it may hold a key, so it is never overwritten")
+    if os.path.commonpath([target, os.path.realpath(plugin_dir)]) == os.path.realpath(plugin_dir):
+        raise InputError(
+            f"--key-file {path} is inside --plugin-dir; the key must stay out of the repository and the release zip"
+        )
 
 
 def fill(template, values):
@@ -289,20 +303,30 @@ def main(argv):
         metavar="FILE",
         help="also write the verification mock (a temporary mu-plugin answering for the store) to FILE",
     )
+    parser.add_argument(
+        "--key-file",
+        metavar="FILE",
+        help="also write the key file (a mu-plugin defining the key constant, left empty) to FILE, a new file outside --plugin-dir",
+    )
     opts = parser.parse_args(argv)
 
     try:
-        values, slug, summary = build(opts)
+        values, slug, plugin_dir, summary = build(opts)
+        out = opts.out or f"{slug}-internal-license.php"
         text = fill(TEMPLATE, values)
         lint = php_lint(text)
         mock = fill(MOCK_TEMPLATE, values) if opts.verify_mock else None
         if mock is not None:
             php_lint(mock)
+        key_file = None
+        if opts.key_file:
+            check_key_file(opts.key_file, plugin_dir)
+            key_file = fill(KEY_TEMPLATE, dict(values, MU_PLUGIN_FILE=os.path.basename(out)))
+            php_lint(key_file)
     except InputError as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 2
 
-    out = opts.out or f"{slug}-internal-license.php"
     print("\n".join(summary))
     print(lint)
 
@@ -311,6 +335,13 @@ def main(argv):
         with open(opts.verify_mock, "w", encoding="utf-8") as fh:
             fh.write(mock)
         print(f"WROTE MOCK: {opts.verify_mock}")
+
+    if key_file is not None:
+        os.makedirs(os.path.dirname(os.path.abspath(opts.key_file)), exist_ok=True)
+        # "x" so a key pasted in between the check and now is not overwritten either.
+        with open(opts.key_file, "x", encoding="utf-8") as fh:
+            fh.write(key_file)
+        print(f"WROTE KEY FILE: {opts.key_file} (paste the key with an editor; never commit it)")
 
     if opts.check:
         try:

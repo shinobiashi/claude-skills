@@ -22,6 +22,12 @@
   review-loop R1（jp4wc-pro PR の前のセルフレビュー）で、有効化の再確認・管理者への限定・定数を読む時点・generate.py の `__FILE__` の確認を足した。
   背景: キー無しでは販売サイトが更新の package を返さない（cart-bridge-jp の API Manager の実測）ので、社内用の 0 円の注文のキーで
   有効化する形にした。jp4wc-pro issue #18（ユーザー指示）。
+  wp-config.php を触りたくないサイト向けに、`generate.py --key-file FILE` でキーのファイル（`templates/internal-license-key.php`。
+  定数を `if ( ! defined() )` で空のまま定義するだけの mu-plugin。キーはユーザーがエディタで貼る）を出せるようにした。
+  `--plugin-dir` の中と既にあるファイル（キーを貼った後かもしれない）には書かない。`verify-wp-env.sh --key-file` で S7 をそのファイルで確かめ、
+  S8（空のまま置く → 何もしない）を足した。キーを貼ったファイルは受け付けない。シナリオテスト 64 → 81 件（空のキー・wp-config.php の定数が
+  勝つことを php で読み込んで確認）。3 つのガード（`defined` の確認・既存ファイル・`--plugin-dir` の中）は、外すと名指しのテストが落ちることを
+  確かめた。jp4wc-pro の wp-env で 39 件 pass（ユーザー指示）。
 - `dev-cycle`: `request-gate-review.sh --ci-only [--ci-timeout SECONDS]`。`--wait-ci` と同じ CI 待ち（現 HEAD の sha の workflow run を
   20 秒ごと、run が無ければ `gh pr checks`）だけをして、何も依頼せず bot も待たない。green なら `CI=passed` と `DONE` で exit 0、
   red・取消・run も check も現れない・`--ci-timeout` 超過・head の移動は exit 3。`--copilot-only`・`--codex-only`・`--request-codex`・

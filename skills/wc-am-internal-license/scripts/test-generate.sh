@@ -84,6 +84,36 @@ if command -v php >/dev/null 2>&1; then
 	if php -l "$W/out/0-mock.php" >/dev/null 2>&1; then ok "the mock passes php -l"; else bad "the mock passes php -l"; fi
 fi
 
+run --plugin-dir "$P" --product-id 188 --out "$W/out/v.php" --check --key-file "$W/site/key.php"
+status "--key-file writes the key file next to --check" 0
+has "the key file is reported" "WROTE KEY FILE: $W/site/key.php"
+contains "the key file defines the constant, left empty" "$W/site/key.php" "define( 'SHOP_EXAMPLE_INTERNAL_API_KEY', '' );"
+contains "the key file does not redefine a constant from wp-config.php" "$W/site/key.php" "if ( ! defined( 'SHOP_EXAMPLE_INTERNAL_API_KEY' ) ) {"
+contains "the key file names the mu-plugin it serves" "$W/site/key.php" "Defines SHOP_EXAMPLE_INTERNAL_API_KEY for v.php"
+contains "the key file is a mu-plugin of its own" "$W/site/key.php" "Plugin Name: My Plugin internal license key"
+contains "the key file names the store" "$W/site/key.php" "internal account on shop.example.com"
+lacks "no placeholder is left in the key file" "$W/site/key.php" "{{"
+if command -v php >/dev/null 2>&1; then
+	if php -l "$W/site/key.php" >/dev/null 2>&1; then ok "the key file passes php -l"; else bad "the key file passes php -l"; fi
+	# Load the key file as WordPress would, with a constant already defined (as in wp-config.php) or not.
+	keyrun() { OUT="$(php -d display_errors=1 -d error_reporting=-1 -r 'define("ABSPATH", "/"); if ($argv[2] !== "") { define("SHOP_EXAMPLE_INTERNAL_API_KEY", $argv[2]); } include $argv[1]; var_export(SHOP_EXAMPLE_INTERNAL_API_KEY);' "$W/site/key.php" "$1" 2>&1)"; }
+	keyrun ""
+	if [ "$OUT" = "''" ]; then ok "the empty key file defines an empty key"; else bad "the empty key file defines an empty key (got: $OUT)"; fi
+	keyrun "from-wp-config"
+	if [ "$OUT" = "'from-wp-config'" ]; then ok "a constant from wp-config.php wins, with no warning"; else bad "a constant from wp-config.php wins, with no warning (got: $OUT)"; fi
+fi
+
+sed -i.bak "s/'SHOP_EXAMPLE_INTERNAL_API_KEY', ''/'SHOP_EXAMPLE_INTERNAL_API_KEY', 'pasted-key'/" "$W/site/key.php" && rm -f "$W/site/key.php.bak"
+run --plugin-dir "$P" --product-id 188 --out "$W/out/v.php" --key-file "$W/site/key.php"
+status "an existing key file is refused" 2
+has "the error says why" "it may hold a key, so it is never overwritten"
+contains "the pasted key is kept" "$W/site/key.php" "'pasted-key'"
+
+run --plugin-dir "$P" --product-id 188 --out "$W/out/v.php" --key-file "$P/tools/key.php"
+status "a key file inside --plugin-dir is refused" 2
+has "the error names the repository" "is inside --plugin-dir"
+if [ -e "$P/tools/key.php" ]; then bad "nothing is written inside --plugin-dir"; else ok "nothing is written inside --plugin-dir"; fi
+
 run --plugin-dir "$P" --product-id 188 --out "$W/out/c.php" --key-constant my_key
 status "a lower-case key constant is refused" 2
 
