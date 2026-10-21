@@ -203,6 +203,16 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wc-am-internal-license`: テンプレート 1.2.0（クラス `AW_WC_AM_Internal_License_1_2_0`）。jp4wc-pro PR #19 の Codex の指摘（P2）を直した。
+  同梱のクライアントは `status`・`update`・`plugininformation` の要求で、キーを URL のクエリ文字列に入れる。社内のキーは管理先のサイトで
+  共有するので、デバッグ用のプラグイン（Query Monitor の HTTP の一覧など）・プロキシ・アクセスログに残ると、設定画面を閉じてキーを
+  見せない作りが崩れる。クライアントには代わりの値（`internal-license-mu-plugin`）を渡し、`pre_http_request`（優先度 1）でその要求を
+  捕まえて、本物のキーを POST の本文に載せ、転送しない設定で送り直す。URL に残るのは代わりの値だけで、捕まえ損ねても販売サイトには
+  代わりの値しか届かない（失敗するだけ）。`pre_http_request` の中で書き換えるだけでは、後の優先度で URL を記録するツールに元の URL が
+  残るため、この形にした。モックは前のフィルターが答えた要求を数えないようにし、クライアントの要求を `product_parent_id` で見分ける。
+  `verify-wp-env.sh` の S1 に、クライアントの要求が本物のキーを本文に載せて届くこと・URL にキーのある要求が無いことを足した（51 件 pass）。
+  代わりの値をやめる・転送を許す・送り直しのフィルターを外す変異で、足した確認が落ちることを `mutate-check.sh` で確かめた
+  （ユーザー指示）
 - `wc-am-internal-license`: テンプレート 1.1.0（クラス `AW_WC_AM_Internal_License_1_1_0`）。jp4wc-pro PR #19 の Copilot の指摘 4 件を直した
   （いずれもセルフレビューで Low として backlog にしていたもの）。メッセージの無い `WP_Error` やタグだけの理由が空文字になり、有効化の成功と
   取り違えていた（`clean()` は空を返さない）。再試行の transient が失敗した設定と結び付いておらず、キーを直しても最大 1 時間試さなかった

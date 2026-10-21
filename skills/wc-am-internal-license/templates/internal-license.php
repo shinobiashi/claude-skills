@@ -13,9 +13,12 @@
  *
  *   The constant is read once all mu-plugins have loaded, so where wp-config.php cannot be edited it can be
  *   defined in another mu-plugin instead.
- * - The bundled WooCommerce API Manager client (wc-am-client.php 2.x) reads the key, the activation status
- *   and the product ID through pre_option_ filters. The key and the product ID are never written to the
- *   database, and the client's license settings page is closed, so the key never shows on screen.
+ * - The bundled WooCommerce API Manager client (wc-am-client.php 2.x) reads a placeholder key, the activation
+ *   status and the product ID through pre_option_ filters. The client puts the key in the query string of
+ *   its request URLs, which debug tools, proxies and access logs may record, so it never gets the real key:
+ *   its requests to {{API_HOST}} are sent again with the real key in the POST body and without following
+ *   redirects. The key and the product ID are never written to the database, and the client's license
+ *   settings page is closed, so the key never shows on screen.
  * - On an administrator's admin page load, the site is activated on {{API_HOST}} when the key, product ID,
  *   instance or site address differs from the last successful activation, and the activation is checked
  *   once a day (the store drops it when the license expires, the subscription goes on hold, or it is removed
@@ -51,6 +54,11 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		 * Seconds after which a successful activation is checked again with a status request.
 		 */
 		const RECHECK_AFTER = 86400;
+
+		/**
+		 * Key the client is given instead of the real one. If it ever reached the store, it would only fail.
+		 */
+		const PLACEHOLDER_KEY = 'internal-license-mu-plugin';
 
 		/**
 		 * Plugin basename, e.g. "my-plugin/my-plugin.php".
@@ -165,6 +173,8 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			add_filter( 'pre_option_' . $this->data_key, array( $this, 'client_data' ) );
 			add_filter( 'pre_update_option_' . $this->data_key, array( $this, 'keep_stored_value' ), 10, 2 );
 			add_filter( 'pre_option_' . $this->data_key . '_activated', array( $this, 'activated' ) );
+			// Early, so the client's request is answered before anything else sends or answers it.
+			add_filter( 'pre_http_request', array( $this, 'send_client_request' ), 1, 3 );
 
 			if ( '' !== $this->product_id_option ) {
 				add_filter( 'pre_option_' . $this->product_id_option, array( $this, 'product_id' ) );
@@ -180,12 +190,41 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		}
 
 		/**
-		 * Returns the client's data option with the key from the constant.
+		 * Returns the client's data option with the placeholder key. send_client_request() puts the real key in.
 		 *
 		 * @return array<string, string>
 		 */
 		public function client_data() {
-			return array( $this->data_key . '_api_key' => $this->api_key() );
+			return array( $this->data_key . '_api_key' => self::PLACEHOLDER_KEY );
+		}
+
+		/**
+		 * Sends a request of the client's to the API Manager again, with the real key in the POST body instead of
+		 * the placeholder in the URL, and without following redirects.
+		 *
+		 * @param false|array<string, mixed>|WP_Error $preempt Response to use instead of a request.
+		 * @param array<string, mixed>|mixed          $args    Request arguments.
+		 * @param string|mixed                        $url     Request URL.
+		 * @return false|array<string, mixed>|WP_Error
+		 */
+		public function send_client_request( $preempt, $args, $url ) {
+			if ( false !== $preempt || ! is_array( $args ) || ! is_string( $url ) || wp_parse_url( $url, PHP_URL_HOST ) !== wp_parse_url( $this->api_url, PHP_URL_HOST ) ) {
+				return $preempt;
+			}
+
+			parse_str( (string) wp_parse_url( $url, PHP_URL_QUERY ), $query );
+			if ( ! isset( $query['wc-api'], $query['api_key'] ) || 'wc-am-api' !== $query['wc-api'] || self::PLACEHOLDER_KEY !== $query['api_key'] ) {
+				return $preempt;
+			}
+
+			unset( $query['wc-api'], $args['_redirection'] );
+			$query['api_key'] = $this->api_key();
+
+			$args['method']      = 'POST';
+			$args['body']        = array_merge( is_array( $args['body'] ?? null ) ? $args['body'] : array(), $query );
+			$args['redirection'] = 0;
+
+			return wp_safe_remote_request( add_query_arg( 'wc-api', 'wc-am-api', $this->api_url ), $args );
 		}
 
 		/**

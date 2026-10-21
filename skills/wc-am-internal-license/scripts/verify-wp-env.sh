@@ -147,8 +147,8 @@ sys.exit(0 if re.search(pattern.replace("{PAGE}", re.escape(page)), html, re.S) 
 PY
 	if [ "$got" = "$1" ]; then ok "$2"; else bad "$2 (expected $1, got $got)"; fi
 }
-count_requests() { # count_requests ACTION [mine]: "mine" counts only the mu-plugin's requests (key in the body; the client puts it in the URL).
-	wpcli option get wcam_mock_log --format=json | python3 -I -c 'import json,sys; print(sum(1 for e in json.load(sys.stdin) if e.get("action") == sys.argv[1] and (sys.argv[2] != "mine" or e.get("key_in_body"))))' "$1" "${2:-all}" 2>/dev/null || echo 0
+count_requests() { # count_requests ACTION [mine]: "mine" counts only the mu-plugin's own requests (the client's carry product_parent_id).
+	wpcli option get wcam_mock_log --format=json | python3 -I -c 'import json,sys; print(sum(1 for e in json.load(sys.stdin) if e.get("action") == sys.argv[1] and (sys.argv[2] != "mine" or not e.get("from_client"))))' "$1" "${2:-all}" 2>/dev/null || echo 0
 }
 reset() { # reset MODE [no-key]
 	wpeval "update_option( 'wcam_mock_mode', '$1' ); foreach ( array( 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', 'wcam_mock_alt_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
@@ -208,6 +208,16 @@ sys.exit(0 if ok else 1)' "$PRODUCT_ID"; then
 else
 	bad "one activation, key in the POST body only, no redirects, product ID $PRODUCT_ID"; printf '%s\n' "$LOG" | sed 's/^/         | /'
 fi
+if printf '%s' "$LOG" | python3 -I -c '
+import json, sys
+client = [e for e in json.load(sys.stdin) if e.get("from_client")]
+ok = len(client) >= 1 and all(e["key_in_body"] and not e["key_in_url"] and e["key_ok"] and e["redirection"] == 0 for e in client)
+sys.exit(0 if ok else 1)'; then
+	ok "the client's own requests reach the store with the real key in the POST body only, no redirects"
+else
+	bad "the client's own requests reach the store with the real key in the POST body only, no redirects"; printf '%s\n' "$LOG" | sed 's/^/         | /'
+fi
+if printf '%s' "$LOG" | grep -q '"key_in_url":true'; then bad "no request carries a key in its URL"; else ok "no request carries a key in its URL"; fi
 LOCATION="$(curl -s -b "$JAR" -o /dev/null -w '%{http_code} %{redirect_url}' "$URL/wp-admin/options-general.php?page=$SETTINGS_PAGE")"
 case "$LOCATION" in "302 "*"/wp-admin/plugins.php") ok "the settings page sends you to the Plugins screen" ;; *) bad "the settings page sends you to the Plugins screen (got $LOCATION)" ;; esac
 RAW="$(client_options)"

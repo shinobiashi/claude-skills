@@ -10,7 +10,8 @@
  * - Answers every request to {{API_HOST}} instead of the real store, so nothing leaves the site.
  *   The option wcam_mock_mode picks the answer: success | already | fail, empty_error (activation fails with
  *   a WP_Error that has no message) or status_down (status requests get HTTP 503).
- * - Logs each request (without the key itself) to the option wcam_mock_log.
+ * - Logs each request (without the key itself) to the option wcam_mock_log, marking the client's requests
+ *   (they carry product_parent_id) apart from the mu-plugin's own.
  *
  * The generated mu-plugin reads the constant on muplugins_loaded, so the load order does not matter. The
  * copy is named "0-wcam-verify-mock.php" so it is easy to spot in mu-plugins.
@@ -31,7 +32,8 @@ if ( ! get_option( 'wcam_mock_no_key' ) && ! defined( '{{KEY_CONSTANT}}' ) ) {
 add_filter(
 	'pre_http_request',
 	static function ( $preempt, $args, $url ) {
-		if ( '{{API_HOST}}' !== wp_parse_url( $url, PHP_URL_HOST ) ) {
+		// A request the mu-plugin already answered (it sends the client's requests again) is not a request.
+		if ( false !== $preempt || '{{API_HOST}}' !== wp_parse_url( $url, PHP_URL_HOST ) ) {
 			return $preempt;
 		}
 
@@ -45,6 +47,8 @@ add_filter(
 		$log   = get_option( 'wcam_mock_log', array() );
 		$log[] = array(
 			'action'      => $action,
+			// The client sends product_parent_id with every request; the mu-plugin's own requests do not.
+			'from_client' => isset( $params['product_parent_id'] ),
 			'key_in_url'  => isset( $query['api_key'] ) && '' !== $query['api_key'],
 			'key_in_body' => isset( $body['api_key'] ) && '' !== $body['api_key'],
 			'key_ok'      => $key_ok,

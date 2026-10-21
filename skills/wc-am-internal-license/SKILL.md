@@ -96,14 +96,15 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 
 - wp-env の development サイトが起動している必要がある（`npx wp-env start`）。管理者は既定で `admin` / `password`（`--user`・`--password`）
 - モック（`--verify-mock`）は、ダミーのキーで定数を定義し、販売サイトへの要求をすべて `pre_http_request` で答える一時 mu-plugin。**本物の販売サイトへは出ない**
-- 場面は S0（mu-plugin 無し）・S1（有効化が通る）・S2（「同じ instance で有効化済み」と断られ、状態確認で通す）・S3（キーが通らない）・
+- 場面は S0（mu-plugin 無し）・S1（有効化が通る。クライアント自身の要求も本物のキーを本文に載せて届き、URL にキーのある要求が 1 つも無い）・
+  S2（「同じ instance で有効化済み」と断られ、状態確認で通す）・S3（キーが通らない）・
   S9（S3 の直後にキーを変える → 1 時間待たずに有効化する）・S10（有効化の要求がメッセージの無い `WP_Error` で失敗 → 成功と取り違えない）・
   S5（販売サイトが有効化を消して 1 日たった → 状態確認で気付いて有効化し直す）・S11（日次の状態確認が HTTP 503 → 有効化を残し、
   有効化し直さず、1 時間は聞き直さない）・S6（ログインしていない `admin-post.php` への要求では有効化しない）・
   S7（定数を後から読まれる mu-plugin で定義しても効く）・S4（定数が無い）。`--key-file` を渡すと、S7 はキーのファイルにダミーのキーを入れた写しで
   確かめ、S8（キーのファイルを空のまま置く → 何もしない）が増える。`--key-file` はキーが空のままのファイルだけを受け付ける
   （キーを貼ったファイルは exit 2。本物のキーを開発サイトへ写さない）。判定はサイトの言語に依らない印（設定画面へのリンク・自動更新の列・
-  更新の行の `update-link`）と、このファイルの英語の文言で見る。mu-plugin 自身の要求は、キーが本文にあることでクライアントの要求と見分ける
+  更新の行の `update-link`）と、このファイルの英語の文言で見る。クライアントの要求は、いつも `product_parent_id` を送ることで mu-plugin 自身の要求と見分ける
 - 終わると（失敗・中断も）写したファイルと触った option・transient を消し、クライアントの option が前と同じかを確かめる。失敗したときは取得した HTML を残してパスを出す
 - 実際の zip のダウンロードと更新はしない（package の URL はモックの偽物）。本物の更新は、本番サイトに置いた後に次の版で確かめる
 
@@ -131,7 +132,8 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 
 | 目的 | 仕組み |
 | --- | --- |
-| キーを渡す | `pre_option_<data_key>` で `<data_key>_api_key` を返す。`pre_update_option_` で DB に書かせない |
+| キーを渡す | `pre_option_<data_key>` で `<data_key>_api_key` に**代わりの値**（`internal-license-mu-plugin`）を返す。`pre_update_option_` で DB に書かせない |
+| クライアントの要求 | クライアントは要求の URL のクエリ文字列にキーを入れる（2.12.2 の作り）。URL はデバッグ用のプラグイン・プロキシ・アクセスログに残りうるので、本物のキーは渡さない。`pre_http_request`（優先度 1）で、販売サイトの `wc-api=wc-am-api` への代わりの値の要求を捕まえ、本物のキーとほかの値を POST の本文に載せて、転送しない設定で送り直す。何かの理由で捕まえられなくても、販売サイトに届くのは代わりの値だけ（失敗するだけ） |
 | 未有効化の通知を出さない | `pre_option_<data_key>_activated` を `Activated` にする |
 | 商品 ID を渡す（クライアントが `null` のとき） | `pre_option_wc_am_product_id_<slug>` で返し、書かせない |
 | 定数を読む時点 | `muplugins_loaded`（すべての mu-plugin の後、クライアントを作る `init` の前）。`wp-config.php` でも別の mu-plugin でも定義できる |
@@ -146,8 +148,9 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 
 ## 限界・注意
 
-- **クライアント自身の要求（`update`・`status`・`plugininformation`）はキーを URL のクエリ文字列で送る**（wc-am-client.php 2.12.2 の作り）。
-  販売サイトのアクセスログにキーが残る。顧客のキーも同じ扱いで、mu-plugin では変えられない
+- 有効化も、送り直すクライアントの要求（`status`・`update`・`plugininformation`）も、パラメーターを POST の本文で送る。クライアント自身は
+  URL のクエリで送るので、販売サイトの API Manager が本文の値を読むことは前提になる（モックは両方を受ける。本物の販売サイトでは未実測）。
+  キーが URL に出なくなったのは社内のキーだけで、顧客のキーで有効化したサイトのクライアントは今もクエリで送る（jp4wc-pro PR #19 の Codex 指摘）
 - 有効化したサイトでは、プラグイン一覧の自動更新の列が「Auto-updates enabled」のラベルになる（クライアントの `auto_update_plugin` が true を返すため）。
   ただしクライアントはこのフィルターと更新の確認を `is_admin()` のときだけ登録し、バックグラウンドの自動更新は cron で動くので、
   実際に自動で更新される可能性は低い（コードを読んだ判断。実測していない）。キーを有効化した顧客のサイトと同じ
