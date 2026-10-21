@@ -203,6 +203,16 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wc-am-internal-license`: テンプレート 1.1.0（クラス `AW_WC_AM_Internal_License_1_1_0`）。jp4wc-pro PR #19 の Copilot の指摘 4 件を直した
+  （いずれもセルフレビューで Low として backlog にしていたもの）。メッセージの無い `WP_Error` やタグだけの理由が空文字になり、有効化の成功と
+  取り違えていた（`clean()` は空を返さない）。再試行の transient が失敗した設定と結び付いておらず、キーを直しても最大 1 時間試さなかった
+  （transient に設定の HMAC を持たせる）。日次の `status` が通信の失敗・200 以外・JSON でないときも「有効化が消えた」と見なし、有効化し直して
+  最大 45 秒待たせていた（`is_active()` を三値にし、取れないときは有効化を残して 1 時間後に聞き直す）。マルチサイトでは何もしないと書きながら
+  ガードが無かった（`boot()` に `is_multisite()`）。モックに 2 本目のキーと `empty_error`・`status_down` を足し、`verify-wp-env.sh` に
+  S9（失敗の直後にキーを変える）・S10（空の `WP_Error`）・S11（日次の確認が 503）を足した（jp4wc-pro で 49 件 pass）。直した 3 か所
+  （T1・T3・T4）は、戻すとそれぞれ S10・S9・S11 だけが落ちることを `mutate-check.sh --only` で確かめた。マルチサイトは wp-env で
+  確かめられないので test-generate.sh が文字列で見る（82 件）。翻訳関数を通していない文言（同じく Copilot の指摘）は、社内用で配布物に入らず
+  テンプレートが製品をまたいで共通なので、翻訳しない判断を SKILL.md の「限界・注意」に書いた（ユーザー指示）
 - `release-bump`: `detect` の判定漏れ 3 種と、`check` の POT 判定の誤りを直した。jp4wc-pro 3.2.0 の bump（PR #13）で
   CLAUDE.md の「現バージョン: x.y.z」、`new WC_AM_Client_2_12_2( __FILE__, null, 188, 'x.y.z', ... )` の版数引数、メインクラスの
   docblock `@version x.y.z` が MENTION（または一覧外）になり、手で書き換えた。`@version` は Copilot の指摘で気づいて直したが、

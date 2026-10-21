@@ -19,12 +19,14 @@
  * - On an administrator's admin page load, the site is activated on {{API_HOST}} when the key, product ID,
  *   instance or site address differs from the last successful activation, and the activation is checked
  *   once a day (the store drops it when the license expires, the subscription goes on hold, or it is removed
- *   from My Account). A failure is retried after an hour and is shown on the Plugins and Updates screens only.
+ *   from My Account). When the store cannot be reached for that check, the activation is kept and checked again
+ *   after an hour. A failure is retried after an hour, or at once when the key, product ID, instance or site
+ *   address changes, and is shown on the Plugins and Updates screens only.
  * - Without the constant (or with a malformed key) this file does nothing, and the plugin behaves like any
  *   other unlicensed site.
  * - Removing this file does not deactivate the site on {{API_HOST}}. Remove the activation from
  *   My Account > API Keys there.
- * - Multisite is not supported.
+ * - Multisite is not supported: on a multisite install this file does nothing.
  *
  * @package {{PACKAGE}}
  */
@@ -150,12 +152,13 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		}
 
 		/**
-		 * Adds the filters and actions. Does nothing without a well-formed key or with a non-https API URL.
+		 * Adds the filters and actions. Does nothing without a well-formed key, with a non-https API URL, or on
+		 * multisite, where the client's options are per site but update data is network-wide.
 		 *
 		 * @return void
 		 */
 		public function boot() {
-			if ( '' === $this->api_key() || 'https' !== wp_parse_url( $this->api_url, PHP_URL_SCHEME ) ) {
+			if ( is_multisite() || '' === $this->api_key() || 'https' !== wp_parse_url( $this->api_url, PHP_URL_SCHEME ) ) {
 				return;
 			}
 
@@ -266,14 +269,23 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			$state       = $this->state();
 			$matches     = hash_equals( $state['fingerprint'], $fingerprint );
 
-			if ( ( $matches && time() - $state['checked_at'] < self::RECHECK_AFTER ) || false !== get_transient( $this->state_option . '_retry' ) ) {
+			// The retry wait holds the fingerprint it was set for, so a changed key or site is tried at once.
+			if ( ( $matches && time() - $state['checked_at'] < self::RECHECK_AFTER ) || get_transient( $this->state_option . '_retry' ) === $fingerprint ) {
 				return;
 			}
 
-			if ( $matches && $this->is_active( $instance, $site ) ) {
-				$state['checked_at'] = time();
-				update_option( $this->state_option, $state );
-				return;
+			if ( $matches ) {
+				$active = $this->is_active( $instance, $site );
+				if ( true === $active ) {
+					$state['checked_at'] = time();
+					update_option( $this->state_option, $state );
+					return;
+				}
+				if ( null === $active ) {
+					// The store could not be asked: keep the activation and ask again after the retry wait.
+					set_transient( $this->state_option . '_retry', $fingerprint, self::RETRY_AFTER );
+					return;
+				}
 			}
 
 			$error = $this->activate( $instance, $site );
@@ -300,7 +312,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			$state['error']       = $error;
 			$state['failed_at']   = time();
 			update_option( $this->state_option, $state );
-			set_transient( $this->state_option . '_retry', 1, self::RETRY_AFTER );
+			set_transient( $this->state_option . '_retry', $fingerprint, self::RETRY_AFTER );
 		}
 
 		/**
@@ -403,7 +415,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 				return '';
 			}
 
-			return $this->is_active( $instance, $site ) ? '' : $this->error_message( $response );
+			return true === $this->is_active( $instance, $site ) ? '' : $this->error_message( $response );
 		}
 
 		/**
@@ -411,7 +423,8 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		 *
 		 * @param string $instance Instance ID the client created.
 		 * @param string $site     Site address without the scheme.
-		 * @return bool False also when the request fails.
+		 * @return bool|null Null when the store could not be asked (the request failed, the status was not 200,
+		 *                   or the response was not JSON).
 		 */
 		private function is_active( $instance, $site ) {
 			$status = $this->request(
@@ -422,7 +435,11 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 				)
 			);
 
-			return is_array( $status ) && isset( $status['success'], $status['data']['activated'] ) && true === $status['success'] && true === $status['data']['activated'];
+			if ( ! is_array( $status ) ) {
+				return null;
+			}
+
+			return isset( $status['success'], $status['data']['activated'] ) && true === $status['success'] && true === $status['data']['activated'];
 		}
 
 		/**
@@ -527,13 +544,16 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		}
 
 		/**
-		 * Strips markup and shortens a message from the network before it is stored.
+		 * Strips markup and shortens a message from the network before it is stored. Never returns '', which
+		 * the callers take for success.
 		 *
 		 * @param string $message Message.
 		 * @return string
 		 */
 		private static function clean( $message ) {
-			return mb_substr( trim( wp_strip_all_tags( $message ) ), 0, 300 );
+			$message = mb_substr( trim( wp_strip_all_tags( $message ) ), 0, 300 );
+
+			return '' === $message ? 'The request failed without a reason.' : $message;
 		}
 	}
 }

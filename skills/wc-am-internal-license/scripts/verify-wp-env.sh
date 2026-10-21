@@ -12,12 +12,13 @@
 #   --url        development site (default: http://localhost:<port in .wp-env.json>)
 #   --mu-dir     host path of the site's wp-content/mu-plugins (default: found from ~/.wp-env/*/docker-compose.yml)
 #
-# Copies the mock (as 0-wcam-verify-mock.php) and the mu-plugin into mu-plugins, logs in, and runs eight
+# Copies the mock (as 0-wcam-verify-mock.php) and the mu-plugin into mu-plugins, logs in, and runs eleven
 # scenarios against the mock store: S0 no mu-plugin, S1 activation succeeds, S2 the store says "already
-# activated", S3 activation fails, S5 the store dropped the activation a day ago, S6 a logged-out request to
-# admin-post.php, S7 the constant comes from a later mu-plugin, S4 the constant is missing. With --key-file,
-# S7 loads the key file with the dummy key filled in, and S8 checks that the key file left empty does nothing.
-# Nothing goes to the real store.
+# activated", S3 activation fails, S9 a changed key right after that failure, S10 the activation request fails
+# with an empty error, S5 the store dropped the activation a day ago, S11 the store cannot be reached for the
+# daily check, S6 a logged-out request to admin-post.php, S7 the constant comes from a later mu-plugin, S4 the
+# constant is missing. With --key-file, S7 loads the key file with the dummy key filled in, and S8 checks that
+# the key file left empty does nothing. Nothing goes to the real store.
 # On exit (also on failure or Ctrl-C) it removes the files it copied and the options and transients it touched,
 # then compares the client's options with what they were before.
 #
@@ -35,7 +36,7 @@ while [ $# -gt 0 ]; do
 		--mu-dir) MU_DIR="$2"; shift 2 ;;
 		--user) USER_NAME="$2"; shift 2 ;;
 		--password) PASSWORD="$2"; shift 2 ;;
-		-h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,24p' "$0"; exit 0 ;;
 		*) echo "ERROR: unknown option $1" >&2; exit 2 ;;
 	esac
 done
@@ -105,7 +106,7 @@ client_options() {
 
 cleanup() {
 	rm -f "$MU_COPY" "$MOCK_COPY" "$LATE_KEY"
-	wpeval "foreach ( array( 'wcam_mock_mode', 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
+	wpeval "foreach ( array( 'wcam_mock_mode', 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', 'wcam_mock_alt_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
 	AFTER="$(client_options)"
 	echo
 	if [ "$AFTER" = "${BEFORE:-}" ]; then
@@ -150,7 +151,7 @@ count_requests() { # count_requests ACTION [mine]: "mine" counts only the mu-plu
 	wpcli option get wcam_mock_log --format=json | python3 -I -c 'import json,sys; print(sum(1 for e in json.load(sys.stdin) if e.get("action") == sys.argv[1] and (sys.argv[2] != "mine" or e.get("key_in_body"))))' "$1" "${2:-all}" 2>/dev/null || echo 0
 }
 reset() { # reset MODE [no-key]
-	wpeval "update_option( 'wcam_mock_mode', '$1' ); foreach ( array( 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
+	wpeval "update_option( 'wcam_mock_mode', '$1' ); foreach ( array( 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', 'wcam_mock_alt_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
 	[ "${2:-}" = "no-key" ] && wpcli option update wcam_mock_no_key 1 >/dev/null
 	return 0
 }
@@ -236,6 +237,19 @@ P="$(page index.php s3b)"
 expect no "the warning does not show on the Dashboard" "$P" "$WARNING"
 [ "$(count_requests activate)" = "0" ] && ok "no retry within the hour" || bad "no retry within the hour"
 
+echo "S9 after that failure, a changed key is tried at once (the hour's wait holds only for the same settings)"
+wpeval "update_option( 'wcam_mock_mode', 'success' ); update_option( 'wcam_mock_alt_key', 1 ); update_option( 'wcam_mock_log', array(), false );" >/dev/null
+P="$(page plugins.php s9)"
+[ "$(count_requests activate)" = "1" ] && ok "the changed key is activated without waiting" || bad "the changed key is activated without waiting (activate requests: $(count_requests activate))"
+expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
+expect no "no activation warning" "$P" "$WARNING"
+
+echo "S10 the activation request fails with an error that has no message"
+reset empty_error
+P="$(page plugins.php s10)"
+expect yes "the row says it is not activated yet (the empty error is not taken for success)" "$P" "$PENDING" row
+expect yes "the warning gives a reason" "$P" "${WARNING}[^<]*without a reason"
+
 echo "S5 the store dropped the activation (expired, subscription on hold, removed in My Account) a day ago"
 reset success
 page plugins.php s5a >/dev/null
@@ -245,6 +259,19 @@ P="$(page plugins.php s5)"
 [ "$(count_requests activate)" = "1" ] && ok "the dropped activation is sent again" || bad "the dropped activation is sent again (activate requests: $(count_requests activate))"
 expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
 expect no "no activation warning" "$P" "$WARNING"
+
+echo "S11 the store cannot be reached for the daily check (status gets HTTP 503)"
+reset status_down
+page plugins.php s11a >/dev/null
+wpeval "\$s = get_option( '${STATE}' ); \$s['checked_at'] = time() - 2 * DAY_IN_SECONDS; update_option( '${STATE}', \$s ); update_option( 'wcam_mock_log', array(), false );" >/dev/null
+P="$(page plugins.php s11)"
+[ "$(count_requests status mine)" -ge 1 ] && ok "the daily check asks the store" || bad "the daily check asks the store"
+[ "$(count_requests activate)" = "0" ] && ok "an unreachable store is not taken for a dropped activation" || bad "an unreachable store is not taken for a dropped activation (activate requests: $(count_requests activate))"
+expect yes "the row still says it is licensed with the internal key" "$P" "$LICENSED" row
+expect no "no activation warning" "$P" "$WARNING"
+wpcli option update wcam_mock_log '[]' --format=json >/dev/null
+page plugins.php s11b >/dev/null
+[ "$(count_requests status mine)" = "0" ] && ok "the store is not asked again within the hour" || bad "the store is not asked again within the hour"
 
 echo "S6 a logged-out request to admin-post.php (it fires admin_init too)"
 reset success

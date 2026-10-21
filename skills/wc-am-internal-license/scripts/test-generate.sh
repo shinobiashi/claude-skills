@@ -46,7 +46,7 @@ contains "API URL comes from the call" "$W/out/a.php" "'api_url'               =
 contains "key constant comes from the API host" "$W/out/a.php" "'key_constant'          => 'SHOP_EXAMPLE_INTERNAL_API_KEY',"
 contains "title comes from the call" "$W/out/a.php" "'title'                 => 'My Plugin',"
 contains "the usage line names the constant" "$W/out/a.php" "define( 'SHOP_EXAMPLE_INTERNAL_API_KEY',"
-contains "the class name carries the template version" "$W/out/a.php" "class AW_WC_AM_Internal_License_1_0_0 {"
+contains "the class name carries the template version" "$W/out/a.php" "class AW_WC_AM_Internal_License_1_1_0 {"
 contains "@package is the slug" "$W/out/a.php" "@package my-plugin"
 lacks "no placeholder is left" "$W/out/a.php" "{{"
 if command -v php >/dev/null 2>&1; then
@@ -76,7 +76,8 @@ run --plugin-dir "$P" --product-id 188 --out "$W/out/v.php" --verify-mock "$W/ou
 status "--verify-mock writes the mock as well" 0
 has "the mock is reported" "WROTE MOCK: $W/out/0-mock.php"
 contains "the mock answers for the API host" "$W/out/0-mock.php" "'shop.example.com' !== wp_parse_url( \$url, PHP_URL_HOST )"
-contains "the mock defines the same constant" "$W/out/0-mock.php" "define( 'SHOP_EXAMPLE_INTERNAL_API_KEY', WCAM_MOCK_KEY );"
+contains "the mock defines the same constant" "$W/out/0-mock.php" "define( 'SHOP_EXAMPLE_INTERNAL_API_KEY', get_option( 'wcam_mock_alt_key' ) ? WCAM_MOCK_ALT_KEY : WCAM_MOCK_KEY );"
+contains "the mu-plugin does nothing on multisite" "$W/out/a.php" "if ( is_multisite() || '' === \$this->api_key()"
 contains "the mock's update names the plugin file" "$W/out/0-mock.php" "'plugin'         => 'my-plugin/my-plugin.php',"
 contains "the mock's package carries the product ID" "$W/out/0-mock.php" "am_download_file=188&verify=1"
 lacks "no placeholder is left in the mock" "$W/out/0-mock.php" "{{"
