@@ -168,6 +168,15 @@ def build(opts):
     raw_id = (call.get("product_id") or "").strip()
     if raw_id.lower() == "null" or raw_id in ("''", '""', "0", ""):
         client_has_product_id = False
+        # Without a product ID the client names its options after the folder of the file it is given, which is
+        # the plugin folder only for __FILE__ of the main file.
+        file_arg = (call.get("file") or "").strip()
+        if file_arg != "__FILE__" or os.path.abspath(path) != os.path.join(plugin_dir, main_file):
+            raise InputError(
+                f"the plugin passes no product ID and creates the client with {file_arg or '(nothing)'} in "
+                f"{os.path.relpath(path, plugin_dir)}; the client then names its options after that file's folder, "
+                f"which is supported only for __FILE__ in the main file {main_file}"
+            )
         if opts.product_id is None:
             raise InputError("the plugin passes no product ID to the client; pass --product-id (the API Manager product ID)")
         product_id = opts.product_id

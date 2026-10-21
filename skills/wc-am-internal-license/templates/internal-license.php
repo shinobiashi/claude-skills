@@ -11,12 +11,15 @@
  *
  *     define( '{{KEY_CONSTANT}}', '<User license key (formerly Master API Key) of the internal account on {{API_HOST}}>' );
  *
+ *   The constant is read once all mu-plugins have loaded, so where wp-config.php cannot be edited it can be
+ *   defined in another mu-plugin instead.
  * - The bundled WooCommerce API Manager client (wc-am-client.php 2.x) reads the key, the activation status
- *   and the product ID through pre_option_ filters. Nothing is written to the database for them, and the
- *   client's license settings page is closed, so the key never shows on screen.
- * - On an admin page load, the site is activated on {{API_HOST}} when the key, product ID, instance or site
- *   address differs from the last successful activation. A failure is retried after an hour and is shown
- *   on the Plugins and Updates screens only.
+ *   and the product ID through pre_option_ filters. The key and the product ID are never written to the
+ *   database, and the client's license settings page is closed, so the key never shows on screen.
+ * - On an administrator's admin page load, the site is activated on {{API_HOST}} when the key, product ID,
+ *   instance or site address differs from the last successful activation, and the activation is checked
+ *   once a day (the store drops it when the license expires, the subscription goes on hold, or it is removed
+ *   from My Account). A failure is retried after an hour and is shown on the Plugins and Updates screens only.
  * - Without the constant (or with a malformed key) this file does nothing, and the plugin behaves like any
  *   other unlicensed site.
  * - Removing this file does not deactivate the site on {{API_HOST}}. Remove the activation from
@@ -41,6 +44,11 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		 * Seconds to wait before retrying a failed activation.
 		 */
 		const RETRY_AFTER = 3600;
+
+		/**
+		 * Seconds after which a successful activation is checked again with a status request.
+		 */
+		const RECHECK_AFTER = 86400;
 
 		/**
 		 * Plugin basename, e.g. "my-plugin/my-plugin.php".
@@ -128,11 +136,25 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		}
 
 		/**
-		 * Registers the hooks. Does nothing without a well-formed key or with a non-https API URL.
+		 * Registers the hooks once all mu-plugins have loaded, so the constant may come from any of them.
+		 * The client is created on init, which is later still.
 		 *
 		 * @return void
 		 */
 		public function register() {
+			if ( did_action( 'muplugins_loaded' ) ) {
+				$this->boot();
+				return;
+			}
+			add_action( 'muplugins_loaded', array( $this, 'boot' ) );
+		}
+
+		/**
+		 * Adds the filters and actions. Does nothing without a well-formed key or with a non-https API URL.
+		 *
+		 * @return void
+		 */
+		public function boot() {
 			if ( '' === $this->api_key() || 'https' !== wp_parse_url( $this->api_url, PHP_URL_SCHEME ) ) {
 				return;
 			}
@@ -222,12 +244,15 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		}
 
 		/**
-		 * Activates the site on the API Manager when the last activation does not match the current settings.
+		 * Activates the site on the API Manager when the last activation does not match the current settings, or
+		 * when the daily check finds that the store no longer has it.
+		 *
+		 * Runs for administrators only: admin_init also fires for logged-out requests to admin-post.php.
 		 *
 		 * @return void
 		 */
 		public function maybe_activate() {
-			if ( wp_doing_ajax() || ! function_exists( 'is_plugin_active' ) || ! is_plugin_active( $this->plugin_file ) ) {
+			if ( wp_doing_ajax() || ! current_user_can( 'manage_options' ) || ! function_exists( 'is_plugin_active' ) || ! is_plugin_active( $this->plugin_file ) ) {
 				return;
 			}
 
@@ -239,8 +264,15 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			$site        = $this->site_object();
 			$fingerprint = hash_hmac( 'sha256', implode( '|', array( $this->api_key(), (string) $this->product_id, $instance, $site ) ), wp_salt( 'auth' ) );
 			$state       = $this->state();
+			$matches     = hash_equals( $state['fingerprint'], $fingerprint );
 
-			if ( hash_equals( $state['fingerprint'], $fingerprint ) || false !== get_transient( $this->state_option . '_retry' ) ) {
+			if ( ( $matches && time() - $state['checked_at'] < self::RECHECK_AFTER ) || false !== get_transient( $this->state_option . '_retry' ) ) {
+				return;
+			}
+
+			if ( $matches && $this->is_active( $instance, $site ) ) {
+				$state['checked_at'] = time();
+				update_option( $this->state_option, $state );
 				return;
 			}
 
@@ -252,6 +284,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 					array(
 						'fingerprint'  => $fingerprint,
 						'activated_at' => time(),
+						'checked_at'   => time(),
 						'error'        => '',
 						'failed_at'    => 0,
 					)
@@ -262,8 +295,10 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 				return;
 			}
 
-			$state['error']     = $error;
-			$state['failed_at'] = time();
+			// Not activated any more, whatever the last success was: the next try activates again.
+			$state['fingerprint'] = '';
+			$state['error']       = $error;
+			$state['failed_at']   = time();
 			update_option( $this->state_option, $state );
 			set_transient( $this->state_option . '_retry', 1, self::RETRY_AFTER );
 		}
@@ -368,6 +403,17 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 				return '';
 			}
 
+			return $this->is_active( $instance, $site ) ? '' : $this->error_message( $response );
+		}
+
+		/**
+		 * Asks the API Manager whether this instance is activated.
+		 *
+		 * @param string $instance Instance ID the client created.
+		 * @param string $site     Site address without the scheme.
+		 * @return bool False also when the request fails.
+		 */
+		private function is_active( $instance, $site ) {
 			$status = $this->request(
 				array(
 					'wc_am_action' => 'status',
@@ -376,11 +422,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 				)
 			);
 
-			if ( is_array( $status ) && isset( $status['success'], $status['data']['activated'] ) && true === $status['success'] && true === $status['data']['activated'] ) {
-				return '';
-			}
-
-			return $this->error_message( $response );
+			return is_array( $status ) && isset( $status['success'], $status['data']['activated'] ) && true === $status['success'] && true === $status['data']['activated'];
 		}
 
 		/**
@@ -439,7 +481,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		/**
 		 * Returns this file's activation record.
 		 *
-		 * @return array{fingerprint: string, activated_at: int, error: string, failed_at: int}
+		 * @return array{fingerprint: string, activated_at: int, checked_at: int, error: string, failed_at: int}
 		 */
 		private function state() {
 			$state = get_option( $this->state_option );
@@ -448,6 +490,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			return array(
 				'fingerprint'  => isset( $state['fingerprint'] ) && is_string( $state['fingerprint'] ) ? $state['fingerprint'] : '',
 				'activated_at' => isset( $state['activated_at'] ) ? (int) $state['activated_at'] : 0,
+				'checked_at'   => isset( $state['checked_at'] ) ? (int) $state['checked_at'] : 0,
 				'error'        => isset( $state['error'] ) && is_string( $state['error'] ) ? $state['error'] : '',
 				'failed_at'    => isset( $state['failed_at'] ) ? (int) $state['failed_at'] : 0,
 			);

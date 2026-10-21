@@ -11,10 +11,12 @@
 #   --url        development site (default: http://localhost:<port in .wp-env.json>)
 #   --mu-dir     host path of the site's wp-content/mu-plugins (default: found from ~/.wp-env/*/docker-compose.yml)
 #
-# Copies the mock (as 0-wcam-verify-mock.php, so it loads first) and the mu-plugin into mu-plugins, logs in,
-# and runs five scenarios against the mock store: S0 no mu-plugin, S1 activation succeeds, S2 the store
-# says "already activated", S3 activation fails, S4 the constant is missing. Nothing goes to the real store.
-# On exit (also on failure or Ctrl-C) it removes both files and the options and transients it touched,
+# Copies the mock (as 0-wcam-verify-mock.php) and the mu-plugin into mu-plugins, logs in, and runs eight
+# scenarios against the mock store: S0 no mu-plugin, S1 activation succeeds, S2 the store says "already
+# activated", S3 activation fails, S5 the store dropped the activation a day ago, S6 a logged-out request to
+# admin-post.php, S7 the constant comes from a later mu-plugin, S4 the constant is missing. Nothing goes to
+# the real store.
+# On exit (also on failure or Ctrl-C) it removes the files it copied and the options and transients it touched,
 # then compares the client's options with what they were before.
 #
 # Exit status: 0 all checks passed, 1 a check failed, 2 bad input or the site is not reachable.
@@ -64,7 +66,10 @@ PLUGIN_FILE="$(conf plugin_file)"
 PRODUCT_ID="$(conf product_id)"
 CLIENT_HAS_ID="$(conf client_has_product_id)"
 SETTINGS_PAGE="$(conf settings_page)"
-[ -n "$PLUGIN_FILE" ] && [ -n "$PRODUCT_ID" ] && [ -n "$CLIENT_HAS_ID" ] || die "cannot read the settings block of $MU_PLUGIN"
+KEY_CONSTANT="$(conf key_constant)"
+MOCK_KEY="$(sed -n "s/^const WCAM_MOCK_KEY = '\([A-Za-z0-9]*\)';\$/\1/p" "$MOCK")"
+[ -n "$PLUGIN_FILE" ] && [ -n "$PRODUCT_ID" ] && [ -n "$CLIENT_HAS_ID" ] && [ -n "$KEY_CONSTANT" ] || die "cannot read the settings block of $MU_PLUGIN"
+[ -n "$MOCK_KEY" ] || die "cannot read the dummy key from $MOCK"
 normalize() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[ _&?-]/_/g'; }
 if [ "$CLIENT_HAS_ID" = "true" ]; then DATA_KEY="wc_am_client_$(normalize "$PRODUCT_ID")"; else DATA_KEY="wc_am_client_$(normalize "$(dirname "$PLUGIN_FILE")")"; fi
 SETTINGS_PAGE="${SETTINGS_PAGE:-${DATA_KEY}_dashboard}"
@@ -72,7 +77,9 @@ STATE="${DATA_KEY}_internal_license"
 
 MU_COPY="$MU_DIR/$(basename "$MU_PLUGIN")"
 MOCK_COPY="$MU_DIR/0-wcam-verify-mock.php"
-for f in "$MU_COPY" "$MOCK_COPY"; do
+# Sorts after the mu-plugin, to define the constant later than the mu-plugin file loads (S7).
+LATE_KEY="$MU_DIR/zz-wcam-verify-late-key.php"
+for f in "$MU_COPY" "$MOCK_COPY" "$LATE_KEY"; do
 	[ -e "$f" ] && die "$f already exists; remove it (or finish the earlier run) first"
 done
 
@@ -88,14 +95,14 @@ client_options() {
 }
 
 cleanup() {
-	rm -f "$MU_COPY" "$MOCK_COPY"
+	rm -f "$MU_COPY" "$MOCK_COPY" "$LATE_KEY"
 	wpeval "foreach ( array( 'wcam_mock_mode', 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
 	AFTER="$(client_options)"
 	echo
 	if [ "$AFTER" = "${BEFORE:-}" ]; then
-		echo "cleanup: removed both files; the client's options are as before"
+		echo "cleanup: removed the copied files; the client's options are as before"
 	else
-		echo "cleanup: removed both files, but the client's options differ from before:"
+		echo "cleanup: removed the copied files, but the client's options differ from before:"
 		diff <(printf '%s\n' "${BEFORE:-}") <(printf '%s\n' "$AFTER") | sed 's/^/  /'
 	fi
 	rm -f "$JAR"
@@ -130,8 +137,8 @@ sys.exit(0 if re.search(pattern.replace("{PAGE}", re.escape(page)), html, re.S) 
 PY
 	if [ "$got" = "$1" ]; then ok "$2"; else bad "$2 (expected $1, got $got)"; fi
 }
-count_requests() { # count_requests ACTION
-	wpcli option get wcam_mock_log --format=json | python3 -I -c 'import json,sys; print(sum(1 for e in json.load(sys.stdin) if e.get("action") == sys.argv[1]))' "$1" 2>/dev/null || echo 0
+count_requests() { # count_requests ACTION [mine]: "mine" counts only the mu-plugin's requests (key in the body; the client puts it in the URL).
+	wpcli option get wcam_mock_log --format=json | python3 -I -c 'import json,sys; print(sum(1 for e in json.load(sys.stdin) if e.get("action") == sys.argv[1] and (sys.argv[2] != "mine" or e.get("key_in_body"))))' "$1" "${2:-all}" 2>/dev/null || echo 0
 }
 reset() { # reset MODE [no-key]
 	wpeval "update_option( 'wcam_mock_mode', '$1' ); foreach ( array( 'wcam_mock_log', 'wcam_mock_activated', 'wcam_mock_no_key', '${STATE}' ) as \$o ) { delete_option( \$o ); } delete_transient( '${STATE}_retry' ); delete_site_transient( 'update_plugins' );" >/dev/null
@@ -198,6 +205,7 @@ if printf '%s' "$RAW" | grep -q "verify0123456789abcdef"; then bad "the key is n
 wpcli option update wcam_mock_log '[]' --format=json >/dev/null
 P="$(page plugins.php s1b)"
 [ "$(count_requests activate)" = "0" ] && ok "the next admin load does not activate again" || bad "the next admin load does not activate again"
+[ "$(count_requests status mine)" = "0" ] && ok "no status check of its own within a day" || bad "no status check of its own within a day"
 expect yes "the Plugins screen offers the update (version 9.9.9 from the mock)" "$P" "$UPDATE_LINK" update-row
 
 echo "S2 the store says the instance is already activated"
@@ -205,7 +213,7 @@ reset already
 P="$(page plugins.php s2)"
 expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
 expect no "no activation warning" "$P" "$WARNING"
-[ "$(count_requests status)" -ge 1 ] && ok "a status request confirmed the activation" || bad "a status request confirmed the activation"
+[ "$(count_requests status mine)" -ge 1 ] && ok "a status request confirmed the activation" || bad "a status request confirmed the activation"
 
 echo "S3 activation fails"
 reset fail
@@ -218,6 +226,32 @@ wpcli option update wcam_mock_log '[]' --format=json >/dev/null
 P="$(page index.php s3b)"
 expect no "the warning does not show on the Dashboard" "$P" "$WARNING"
 [ "$(count_requests activate)" = "0" ] && ok "no retry within the hour" || bad "no retry within the hour"
+
+echo "S5 the store dropped the activation (expired, subscription on hold, removed in My Account) a day ago"
+reset success
+page plugins.php s5a >/dev/null
+wpeval "delete_option( 'wcam_mock_activated' ); \$s = get_option( '${STATE}' ); \$s['checked_at'] = time() - 2 * DAY_IN_SECONDS; update_option( '${STATE}', \$s ); update_option( 'wcam_mock_log', array(), false );" >/dev/null
+P="$(page plugins.php s5)"
+[ "$(count_requests status mine)" -ge 1 ] && ok "the daily check asks the store" || bad "the daily check asks the store"
+[ "$(count_requests activate)" = "1" ] && ok "the dropped activation is sent again" || bad "the dropped activation is sent again (activate requests: $(count_requests activate))"
+expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
+expect no "no activation warning" "$P" "$WARNING"
+
+echo "S6 a logged-out request to admin-post.php (it fires admin_init too)"
+reset success
+curl -s -o /dev/null "$URL/wp-admin/admin-post.php"
+[ "$(count_requests activate)" = "0" ] && ok "a logged-out request does not activate" || bad "a logged-out request does not activate"
+page plugins.php s6 >/dev/null
+[ "$(count_requests activate)" = "1" ] && ok "the next administrator's load does" || bad "the next administrator's load does"
+
+echo "S7 the constant comes from a mu-plugin that loads after this one (a host where wp-config.php cannot be edited)"
+reset success no-key
+printf "<?php\n// TEMPORARY (verify-wp-env.sh S7).\ndefine( '%s', '%s' );\n" "$KEY_CONSTANT" "$MOCK_KEY" >"$LATE_KEY"
+P="$(page plugins.php s7)"
+rm -f "$LATE_KEY"
+expect no "no inactive notice" "$P" "$NOTICE"
+expect yes "the row says it is licensed with the internal key" "$P" "$LICENSED" row
+[ "$(count_requests activate)" = "1" ] && ok "it activates with the later constant" || bad "it activates with the later constant"
 
 echo "S4 the mu-plugin is in place but the constant is missing"
 reset success no-key

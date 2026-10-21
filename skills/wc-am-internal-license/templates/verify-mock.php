@@ -10,8 +10,8 @@
  *   The option wcam_mock_mode picks the answer to activation: success | already | fail.
  * - Logs each request (without the key itself) to the option wcam_mock_log.
  *
- * The file name starts with "0-" so it loads before the generated mu-plugin, which reads the constant
- * when it loads.
+ * The generated mu-plugin reads the constant on muplugins_loaded, so the load order does not matter. The
+ * copy is named "0-wcam-verify-mock.php" so it is easy to spot in mu-plugins.
  *
  * @package {{PACKAGE}}
  */

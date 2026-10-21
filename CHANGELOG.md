@@ -8,14 +8,18 @@
 - `wc-am-internal-license`: 新規。WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、
   社内ライセンスの mu-plugin を生成する。wp-config.php の定数の社内用アカウントのユーザーライセンスキー（API Manager 3.8 からの
   表示名。旧称 Master API Key。SKILL.md に販売サイトで見られる場所の表）を、クライアントが読む option（キー・有効化の状態・
-  商品 ID）へ `pre_option_` で渡し（`pre_update_option_` で DB には書かせない）、管理画面の読み込みで販売サイトに有効化する（POST の本文・
-  転送しない。「同じ instance で有効化済み」は状態確認で通す。失敗は 1 時間あけて再試行し、プラグイン一覧と更新の画面にだけ出す）。
-  ライセンスの設定画面は閉じる。`scripts/generate.py` がプラグインの `new WC_AM_Client_X_Y_Z(...)` から商品 ID・販売サイトの URL・
-  ソフトウェア名・カスタムメニューを読み、`templates/internal-license.php` を埋めて `php -l` を通す（`--check` でテンプレートとの差、
-  `--verify-mock` で確認用のモック）。`scripts/verify-wp-env.sh` が wp-env の development サイトで、販売サイトのモックに対して 5 つの場面
-  （mu-plugin 無し・有効化が通る・有効化済みと断られる・キーが通らない・定数が無い）を確かめ、終わると置いたものと触った option を消す。
-  シナリオテスト 60 件（`scripts/test-generate.sh`）。生成のガード 3 つと mu-plugin の 2 か所（転送の禁止・設定画面の転送）は、
-  壊すと名指しのテストが落ちることを確かめた。jp4wc-pro（商品 ID 188。クライアントには `null`）で 26 件の確認が pass。
+  商品 ID）へ `pre_option_` で渡し（`pre_update_option_` で DB には書かせない）、管理者の管理画面の読み込みで販売サイトに有効化する
+  （POST の本文・転送しない。「同じ instance で有効化済み」は状態確認で通す。1 日 1 回状態を確かめ、期限・定期購入の保留・My Account での
+  削除で消えていれば有効化し直す。失敗は 1 時間あけて再試行し、プラグイン一覧と更新の画面にだけ出す）。定数は `muplugins_loaded` で読むので、
+  wp-config.php を編集できないホストでは別の mu-plugin で定義してもよい。ライセンスの設定画面は閉じる。
+  `scripts/generate.py` がプラグインの `new WC_AM_Client_X_Y_Z(...)` から商品 ID・販売サイトの URL・ソフトウェア名・カスタムメニューを読み、
+  `templates/internal-license.php` を埋めて `php -l` を通す（`--check` でテンプレートとの差、`--verify-mock` で確認用のモック。商品 ID が
+  `null` でメインファイルの `__FILE__` 以外からクライアントを作るプラグインは、option の名前が変わるので止める）。`scripts/verify-wp-env.sh` が
+  wp-env の development サイトで、販売サイトのモックに対して 8 つの場面（mu-plugin 無し・有効化が通る・有効化済みと断られる・キーが通らない・
+  販売サイトが有効化を消した・ログインしていない admin-post.php・後から読まれる mu-plugin の定数・定数が無い）を確かめ、終わると置いたものと
+  触った option を消す。シナリオテスト 64 件（`scripts/test-generate.sh`）。生成のガード 3 つと mu-plugin の 2 か所（転送の禁止・設定画面の転送）は、
+  壊すと名指しのテストが落ちることを確かめた。jp4wc-pro（商品 ID 188。クライアントには `null`）で 36 件の確認が pass。
+  review-loop R1（jp4wc-pro PR の前のセルフレビュー）で、有効化の再確認・管理者への限定・定数を読む時点・generate.py の `__FILE__` の確認を足した。
   背景: キー無しでは販売サイトが更新の package を返さない（cart-bridge-jp の API Manager の実測）ので、社内用の 0 円の注文のキーで
   有効化する形にした。jp4wc-pro issue #18（ユーザー指示）。
 - `dev-cycle`: `request-gate-review.sh --ci-only [--ci-timeout SECONDS]`。`--wait-ci` と同じ CI 待ち（現 HEAD の sha の workflow run を

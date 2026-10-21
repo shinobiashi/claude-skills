@@ -169,6 +169,22 @@ plugin "$P" no-client.php "// nothing"
 run --plugin-dir "$P" --product-id 1 --out "$W/out/x.php"
 status "a plugin without the client is refused" 2
 
+# Null product ID with the client created outside __FILE__ of the main file ----------------------
+
+P="$W/null-sub"
+plugin "$P" null-sub.php "require __DIR__ . '/includes/license.php';"
+mkdir -p "$P/includes"
+printf '<?php\nnew WC_AM_Client_2_12_2( __FILE__, null, 188, "1.0.0", "plugin", "https://shop.example.com/", "Sub", "sub" );\n' >"$P/includes/license.php"
+run --plugin-dir "$P" --product-id 188 --out "$W/out/ns.php"
+status "null product ID with the client in an included file is refused" 2
+has "the error names the file" "creates the client with __FILE__ in includes/license.php"
+
+P="$W/null-const"
+plugin "$P" null-const.php "new WC_AM_Client_2_12_2( MY_MAIN_FILE, null, 188, '1.0.0', 'plugin', 'https://shop.example.com/', 'Const', 'const' );"
+run --plugin-dir "$P" --product-id 188 --out "$W/out/nc.php"
+status "null product ID with a constant instead of __FILE__ is refused" 2
+has "the error names the argument" "creates the client with MY_MAIN_FILE in null-const.php"
+
 # The client created in another file -------------------------------------------------------------
 
 P="$W/elsewhere"

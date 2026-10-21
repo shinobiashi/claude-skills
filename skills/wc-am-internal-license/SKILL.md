@@ -1,6 +1,6 @@
 ---
 name: wc-am-internal-license
-description: WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、「社内ライセンス」の mu-plugin を生成するスキル。wp-config.php の定数に置いた社内用アカウントのユーザーライセンスキー（旧称 Master API Key）で販売サイトに自動で有効化するので、画面でライセンスキーを入れなくても、未有効化の通知や「Auto-updates unavailable.」が出ず、顧客と同じ経路で更新が届く。商品 ID・販売サイトの URL などはプラグインの `new WC_AM_Client_X_Y_Z(...)` から読み取り、wp-env での確認（販売サイトのモックで 5 つの場面）までスクリプトで行う。「ライセンスキー無しで使えるように」「社内用ライセンスの mu-plugin」「自社・管理先のサイトでキーを入れずに更新したい」「ライセンスの警告を消したい」「wc-am-internal-license」などと言われたら使う。
+description: WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、「社内ライセンス」の mu-plugin を生成するスキル。wp-config.php の定数に置いた社内用アカウントのユーザーライセンスキー（旧称 Master API Key）で販売サイトに自動で有効化するので、画面でライセンスキーを入れなくても、未有効化の通知や「Auto-updates unavailable.」が出ず、顧客と同じ経路で更新が届く。商品 ID・販売サイトの URL などはプラグインの `new WC_AM_Client_X_Y_Z(...)` から読み取り、wp-env での確認（販売サイトのモックで 8 つの場面）までスクリプトで行う。「ライセンスキー無しで使えるように」「社内用ライセンスの mu-plugin」「自社・管理先のサイトでキーを入れずに更新したい」「ライセンスの警告を消したい」「wc-am-internal-license」などと言われたら使う。
 ---
 
 # wc-am-internal-license — 社内ライセンスの mu-plugin を生成する
@@ -31,6 +31,7 @@ python3 -I "$S/generate.py" --plugin-dir . --product-id 188 --out tools/mu-plugi
 | --- | --- |
 | WC AM クライアント 2.x（`WC_AM_Client_X_Y_Z`）を、プラグインとして（`'plugin'`）作っている | テーマは対象外。generate.py が止める |
 | クライアントに渡す商品 ID が `null` か整数のリテラル | `null` なら `--product-id` が必須（顧客が設定画面で入れる値。API Manager の商品 ID） |
+| 商品 ID が `null` のときは、メインファイルの中で `__FILE__` を渡してクライアントを作っている | 違えば generate.py が止める（クライアントは渡されたファイルのフォルダ名で option を作るので、下位のファイルからだと名前が変わる） |
 | 販売サイトの URL が https の文字列リテラル | 定数などで渡しているなら `--api-url` |
 | ソフトウェア名が英数字と ` ._()&+-` だけ | 違えば `--title` |
 | `$custom_menu` を渡していない、または `menu_slug` を文字列で書いている | 読めなければ `--settings-page` にそのメニューのスラッグ |
@@ -85,15 +86,23 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 - wp-env の development サイトが起動している必要がある（`npx wp-env start`）。管理者は既定で `admin` / `password`（`--user`・`--password`）
 - モック（`--verify-mock`）は、ダミーのキーで定数を定義し、販売サイトへの要求をすべて `pre_http_request` で答える一時 mu-plugin。**本物の販売サイトへは出ない**
 - 場面は S0（mu-plugin 無し）・S1（有効化が通る）・S2（「同じ instance で有効化済み」と断られ、状態確認で通す）・S3（キーが通らない）・
-  S4（定数が無い）。判定はサイトの言語に依らない印（設定画面へのリンク・自動更新の列・更新の行の `update-link`）と、このファイルの英語の文言で見る
-- 終わると（失敗・中断も）2 つのファイルと触った option・transient を消し、クライアントの option が前と同じかを確かめる。失敗したときは取得した HTML を残してパスを出す
+  S5（販売サイトが有効化を消して 1 日たった → 状態確認で気付いて有効化し直す）・S6（ログインしていない `admin-post.php` への要求では有効化しない）・
+  S7（定数を後から読まれる mu-plugin で定義しても効く）・S4（定数が無い）。判定はサイトの言語に依らない印（設定画面へのリンク・自動更新の列・
+  更新の行の `update-link`）と、このファイルの英語の文言で見る。mu-plugin 自身の要求は、キーが本文にあることでクライアントの要求と見分ける
+- 終わると（失敗・中断も）写したファイルと触った option・transient を消し、クライアントの option が前と同じかを確かめる。失敗したときは取得した HTML を残してパスを出す
 - 実際の zip のダウンロードと更新はしない（package の URL はモックの偽物）。本物の更新は、本番サイトに置いた後に次の版で確かめる
 
 ### 5. サイトに置く
 
 - `wp-content/mu-plugins/` にファイルを写し、`wp-config.php` に `define( '<定数>', '<ユーザーライセンスキー>' );` を足す
-- 管理画面を 1 回開くと有効化される。プラグイン一覧の行に「Licensed with the internal key (mu-plugin)」が出ればよい
+  （`/* That's all, stop editing! */`〔日本語版は「編集が必要なのはここまでです」〕の行より上）
+- `wp-config.php` を編集できないホストでは、同じ `define` だけを書いた別の mu-plugin を置いてもよい。定数は `muplugins_loaded` で読むので、
+  ファイル名の順は問わない。そのファイルはキーを含むので、リポジトリにも配布物にも入れない
+- 管理者が管理画面を 1 回開くと有効化される。プラグイン一覧の行に「Licensed with the internal key (mu-plugin)」が出ればよい
   （失敗するとプラグイン一覧と更新の画面にだけ理由を出し、1 時間おきに再試行する）
+- 定期購入の製品なら、キーが効くのは定期購入が「有効」か「キャンセル待ち」の間だけ。「保留」になると API Manager は有効化を消す
+  （`wc-am-subscription.php`。期限切れや My Account からの削除も同じ）。mu-plugin は 1 日 1 回の状態確認で気付き、有効化し直す。
+  定期購入が戻っていなければ失敗の理由がプラグイン一覧に出る
 
 ### 6. 外すとき
 
@@ -108,8 +117,10 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 | キーを渡す | `pre_option_<data_key>` で `<data_key>_api_key` を返す。`pre_update_option_` で DB に書かせない |
 | 未有効化の通知を出さない | `pre_option_<data_key>_activated` を `Activated` にする |
 | 商品 ID を渡す（クライアントが `null` のとき） | `pre_option_wc_am_product_id_<slug>` で返し、書かせない |
-| 有効化 | `admin_init`（優先度 20。クライアントが instance を作った後）で、キー・商品 ID・instance・サイトのアドレスの HMAC が前回の成功と違えば、販売サイトに `activate` を POST の本文で送る（転送しない・15 秒）。断られたら `status` で有効か確かめる。成功したら `update_plugins` を捨てる |
-| 失敗 | 理由（タグを除き 300 字まで）を記録し、1 時間の transient で再試行を止める。プラグイン一覧と更新の画面にだけ出す（`manage_options`） |
+| 定数を読む時点 | `muplugins_loaded`（すべての mu-plugin の後、クライアントを作る `init` の前）。`wp-config.php` でも別の mu-plugin でも定義できる |
+| 有効化 | 管理者（`manage_options`）の `admin_init`（優先度 20。クライアントが instance を作った後。ログインしていない `admin-post.php` でも `admin_init` は走るので権限で絞る）で、キー・商品 ID・instance・サイトのアドレスの HMAC が前回の成功と違えば、販売サイトに `activate` を POST の本文で送る（転送しない・15 秒）。断られたら `status` で有効か確かめる。成功したら `update_plugins` を捨てる |
+| 有効化の確認 | 前回の成功と同じでも、1 日たったら `status` で確かめる。販売サイトが有効化を消していれば（期限・定期購入の保留・My Account からの削除）有効化し直す |
+| 失敗 | 理由（タグを除き 300 字まで）を記録し、記録の「有効化済み」を消して、1 時間の transient で再試行を止める。プラグイン一覧と更新の画面にだけ出す（`manage_options`） |
 | 設定画面を閉じる | メニューから外し、直接開いたらプラグイン一覧へ転送する（入力欄に差し替えたキーが出るため） |
 | 置いてあると分かるように | プラグイン一覧の行に「Licensed with the internal key (mu-plugin)」 |
 | 何もしない条件 | 定数が無い・形が違う（`[A-Za-z0-9_-]{1,190}`）・販売サイトが https でない |
@@ -120,7 +131,10 @@ bash "$S/verify-wp-env.sh" --mu-plugin tools/mu-plugins/<slug>-internal-license.
 
 - **クライアント自身の要求（`update`・`status`・`plugininformation`）はキーを URL のクエリ文字列で送る**（wc-am-client.php 2.12.2 の作り）。
   販売サイトのアクセスログにキーが残る。顧客のキーも同じ扱いで、mu-plugin では変えられない
-- 有効化したサイトでは、クライアントが `auto_update_plugin` で自動更新を強制する（プラグイン一覧の列は「Auto-updates enabled」のラベル）。キーを有効化した顧客のサイトと同じ
+- 有効化したサイトでは、プラグイン一覧の自動更新の列が「Auto-updates enabled」のラベルになる（クライアントの `auto_update_plugin` が true を返すため）。
+  ただしクライアントはこのフィルターと更新の確認を `is_admin()` のときだけ登録し、バックグラウンドの自動更新は cron で動くので、
+  実際に自動で更新される可能性は低い（コードを読んだ判断。実測していない）。キーを有効化した顧客のサイトと同じ
+- `<data_key>_activated` には書き込みを止めていない（クライアントが `Deactivated` などを書く）。秘密の値ではなく、mu-plugin を外した後の本当の状態になる
 - DB を複製したサイト（本番から作ったステージングなど）は instance が同じなので、同じ有効化を共有する（アドレスが違うので有効化を送り直すが、「有効化済み」→状態確認で通る）
 - マルチサイトは対象外（記録がサイトごとの option、更新の情報がネットワークで 1 つ）
 - 顧客のキーで有効化済みのサイトに置くと、こちらのキーが優先される。顧客の有効化は販売サイトに残るので、先に無効化してもらう
