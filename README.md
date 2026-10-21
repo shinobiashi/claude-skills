@@ -118,6 +118,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`ssm-provider`](skills/ssm-provider/SKILL.md) | Signal Mail for WooCommerce の配信プロバイダ（コア Resend / 有料アドオン Brevo・SES・Mailgun）の実装手順。契約・retryable 規則・Webhook 正規化・必須テスト・アドオン骨格・Webhook 署名スクリプト |
 | [`saai-admin-react`](skills/saai-admin-react/SKILL.md) | Use when building or extending a WordPress / WooCommerce admin page in React the SAAI wa… |
 | [`payjp-v2-woocommerce`](skills/payjp-v2-woocommerce/SKILL.md) | Use when developing WooCommerce payment gateway plugins using PAY.JP v2 API: credit card… |
+| [`wc-am-internal-license`](skills/wc-am-internal-license/SKILL.md) | WooCommerce API Manager のクライアントを同梱する自社の有料プラグインに、社内ライセンスの mu-plugin を生成する。wp-config.php の定数の社内用キーで自動で有効化し、キーの入力・未有効化の通知なしで更新を受け取る。生成と wp-env での確認のスクリプト付き |
 
 ### WooCommerce.com Marketplace
 
