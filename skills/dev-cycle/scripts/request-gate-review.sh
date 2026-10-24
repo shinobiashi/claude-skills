@@ -70,11 +70,26 @@
 #   `gh run list --commit`, which matches only the full sha, and kept
 #   waiting for a CI that had long been green (wcpdf-jp-v1 PR #33,
 #   2026-10-18).
+# - Copilot can review the same head twice, the second review a few minutes
+#   after the first (Japanized-for-WooCommerce PR #281 and #282, 2026-10-23:
+#   3 and 4 minutes later, with a new finding). The wait used to end on the
+#   first one, and the second was caught only because the thread count was
+#   read again before triage. Once every bot has responded, the wait goes on
+#   until --copilot-settle seconds (default 300) have passed since the last
+#   Copilot review of the head was seen; another review restarts that
+#   window and is announced. Time spent waiting for Codex counts towards
+#   it, so the window adds nothing when Codex answers later anyway.
+# - Codex has stayed "Running" for well over an hour (1h46m for one review
+#   on Japanized-for-WooCommerce PR #282, 2026-10-23). A timeout now says for
+#   how long its summary comment has said Running, and past
+#   CODEX_LONG_RUN minutes suggests going on without it, re-reading the
+#   threads right before the next push so that a late review is not missed.
 #
 # Usage:
 #   request-gate-review.sh <PR> [--copilot-only|--codex-only] [--request-codex]
 #                          [--wait-only] [--timeout SECONDS] [--since TIMESTAMP]
 #                          [--wait-ci] [--ci-timeout SECONDS]
+#                          [--copilot-settle SECONDS]
 #   request-gate-review.sh <PR> --ci-only [--ci-timeout SECONDS]
 #
 #   --wait-only   request nothing; only wait for the responses. For after a
@@ -95,6 +110,12 @@
 #                 (default 2700s = 45 min: a 15-minute pipeline plus a runner
 #                 backlog; giving --ci-timeout implies --wait-ci). Size the
 #                 outer background timeout to --ci-timeout + 5 min + --timeout.
+#   --copilot-settle
+#                 once every bot has responded, keep waiting until this many
+#                 seconds have passed since the last Copilot review of the head
+#                 was seen (default 300; 0 = stop at the first response). A
+#                 further review restarts the window. Counted in sleeps, and
+#                 the time spent waiting for Codex counts towards it.
 #   --ci-only     only the --wait-ci wait: request nothing, wait for no bot.
 #                 Exit 0 with CI=passed and DONE when the CI of the head
 #                 passed, 3 otherwise (as --wait-ci). Not combined with
@@ -136,7 +157,8 @@
 #      line says which
 #
 # Worst case: --ci-timeout (with --wait-ci), then about 5 minutes of
-# requesting/confirming plus --timeout.
+# requesting/confirming plus --timeout, plus --copilot-settle for each
+# Copilot review of the head that arrives after the others have responded.
 # Requires `jq` (not bundled with `gh`) and gh 2.88+ (for `@copilot`).
 set -euo pipefail
 
@@ -155,6 +177,7 @@ since=""
 wait_ci=0
 ci_timeout=2700
 ci_only=0
+copilot_settle=300
 bot_flags=""
 
 while [ $# -gt 0 ]; do
@@ -172,6 +195,13 @@ while [ $# -gt 0 ]; do
 			esac
 			;;
 		--since) shift; since="${1:?--since requires a UTC timestamp}" ;;
+		--copilot-settle)
+			shift
+			copilot_settle="${1:?--copilot-settle requires a value}"
+			case "$copilot_settle" in
+				''|*[!0-9]*) echo "request-gate-review: --copilot-settle wants a non-negative integer, got: $copilot_settle" >&2; exit 64 ;;
+			esac
+			;;
 		--wait-ci) wait_ci=1 ;;
 		--ci-timeout)
 			shift
@@ -407,6 +437,19 @@ codex_summary_state() {
 	esac
 }
 
+# Whole minutes since the "Running since" time in Codex's summary comment;
+# nothing when it is not running or the time cannot be read. For the
+# timeout message only.
+CODEX_LONG_RUN=60
+codex_running_minutes() {
+	gh api --paginate "repos/$slug/issues/$pr/comments" 2>/dev/null | jq -rs --arg l "$CODEX_LOGIN" --arg m "$CODEX_SUMMARY_MARK" '
+		[.[] | if type == "array" then .[] else . end
+		 | select(.user.login == $l and ((.body // "") | contains($m)))] | last
+		| select(. != null)
+		| (.body | capture("\\*\\*Running\\*\\* since <relative-time datetime=\"(?<t>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})")? | .t)
+		| (now - ((. + "Z") | fromdateiso8601)) / 60 | floor' 2>/dev/null || true
+}
+
 # 1 while the GraphQL `reviewRequests` (what the web UI shows as pending
 # reviewers) lists Copilot, else 0. Same failure handling as probe_count.
 copilot_pending_graphql() {
@@ -617,6 +660,11 @@ if [ "$want_copilot" -eq 0 ] && [ "$want_codex" -eq 0 ]; then
 fi
 
 codex_summary=none
+# Copilot reviews of the head seen so far, and what is left of the settle
+# window that follows the last one (see --copilot-settle), in slept seconds.
+copilot_seen=0
+settle_left=0
+settle_said=0
 deadline=$((SECONDS + timeout))
 while :; do
 	c=-
@@ -642,6 +690,12 @@ while :; do
 	fi
 	echo "$(date -u +%H:%M:%S) copilot=$c codex=$x$summary_note"
 
+	if [ "$want_copilot" -eq 1 ] && [ "$c" -gt "$copilot_seen" ]; then
+		[ "$copilot_seen" -ge 1 ] && echo "request-gate-review: another Copilot review of ${head_sha:0:7} arrived ($c in all) — read every one of them (gate-threads.sh status / bodies)"
+		copilot_seen="$c"
+		settle_left="$copilot_settle"
+	fi
+
 	all=1
 	if [ "$want_copilot" -eq 1 ]; then
 		if [ "$c" -ge 1 ]; then copilot_status=responded; else all=0; fi
@@ -649,11 +703,21 @@ while :; do
 	if [ "$want_codex" -eq 1 ]; then
 		if [ "$x" -ge 1 ]; then codex_status=responded; else all=0; fi
 	fi
-	[ "$all" -eq 1 ] && finish "$(exit_code_for 0)"
 
-	[ "$SECONDS" -ge "$deadline" ] && break
-	remaining=$((deadline - SECONDS))
-	sleep "$((remaining < 60 ? remaining : 60))"
+	if [ "$all" -eq 1 ]; then
+		[ "$settle_left" -le 0 ] && finish "$(exit_code_for 0)"
+		if [ "$settle_said" -eq 0 ]; then
+			echo "request-gate-review: every bot has responded; waiting ${settle_left}s more in case Copilot reviews ${head_sha:0:7} again (--copilot-settle)"
+			settle_said=1
+		fi
+		step=$((settle_left < 60 ? settle_left : 60))
+	else
+		[ "$SECONDS" -ge "$deadline" ] && break
+		remaining=$((deadline - SECONDS))
+		step=$((remaining < 60 ? remaining : 60))
+	fi
+	sleep "$step"
+	settle_left=$((settle_left > step ? settle_left - step : 0))
 done
 
 [ "$want_copilot" -eq 1 ] && [ "$copilot_status" != responded ] && copilot_status=timeout
@@ -672,7 +736,13 @@ if [ "$codex_status" = timeout ]; then
 			Completed)
 				echo "request-gate-review: Codex's summary comment says Completed for $summary_sha, but no review, comment or 👍 of this round was found — look at the PR before asking again" >&2 ;;
 			*)
-				echo "request-gate-review: Codex is still reviewing $summary_sha (its summary comment says ${codex_summary%%@*}) — wait again with --wait-only --since $T" >&2 ;;
+				running_min="$(codex_running_minutes)"
+				case "$running_min" in ''|*[!0-9]*) running_min="" ;; esac
+				echo "request-gate-review: Codex is still reviewing $summary_sha (its summary comment says ${codex_summary%%@*}${running_min:+, for $running_min min}) — wait again with --wait-only --since $T" >&2
+				if [ -n "$running_min" ] && [ "$running_min" -ge "$CODEX_LONG_RUN" ]; then
+					echo "request-gate-review: that is over $CODEX_LONG_RUN min. Going on without Codex is reasonable: record it as unconfirmed, and right before the next push run gate-threads.sh status $pr $T again, so that a review landing in between is not missed" >&2
+				fi
+				;;
 		esac
 	fi
 fi

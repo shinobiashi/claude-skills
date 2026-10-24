@@ -46,11 +46,14 @@ EOS
 #                          FAKE_HEAD exists
 #   FAKE_COPILOT_STALE     sha: a Copilot review of that other commit exists
 #                          from the start
+#   FAKE_COPILOT_SECOND_AFTER  nth reviews probe from which a second Copilot review
+#                          of FAKE_HEAD exists (Copilot reviewing the same head twice)
 #   FAKE_CODEX_AFTER       nth reviews probe from which a Codex review exists
 #   FAKE_CODEX_COMMENT_AFTER  nth comments probe from which a Codex comment exists
 #   FAKE_CODEX_SUMMARY     Running | Completed: Codex's "Codex Review Summary" comment
 #                          exists from the start, in that state (the real table row)
 #   FAKE_CODEX_SUMMARY_SHA commit in that row (default: the first 7 of FAKE_HEAD)
+#   FAKE_CODEX_SUMMARY_SINCE  now: the row says Running since now (default: a time in 2026-10-06)
 #   FAKE_CODEX_THUMBS      new | old: Codex's 👍 on the PR body, given now or in January
 #   FAKE_CI                `gh pr checks` answer from the (FAKE_CI_PENDING+1)th call on:
 #                          pass | fail | none (no checks: gh's error) | pending (forever)
@@ -148,6 +151,9 @@ case "$1 $2" in
 				if [ -n "${FAKE_COPILOT_AFTER:-}" ] && [ "$n" -ge "$FAKE_COPILOT_AFTER" ]; then
 					items="${items:+$items,}{\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$(now)\"}"
 				fi
+				if [ -n "${FAKE_COPILOT_SECOND_AFTER:-}" ] && [ "$n" -ge "$FAKE_COPILOT_SECOND_AFTER" ]; then
+					items="${items:+$items,}{\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$(now)\"}"
+				fi
 				if [ -n "${FAKE_CODEX_AFTER:-}" ] && [ "$n" -ge "$FAKE_CODEX_AFTER" ]; then
 					items="${items:+$items,}{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$(now)\"}"
 				fi
@@ -156,13 +162,15 @@ case "$1 $2" in
 				n="$(count comments)"
 				items=""
 				if [ -n "${FAKE_CODEX_SUMMARY:-}" ]; then
-					items="$(jq -cn --arg st "$FAKE_CODEX_SUMMARY" --arg sha "${FAKE_CODEX_SUMMARY_SHA:-${FAKE_HEAD:0:7}}" --arg now "$(now)" '
+					since="2026-10-06T21:55:21.778548Z"
+					[ "${FAKE_CODEX_SUMMARY_SINCE:-}" = now ] && since="$(date -u +%Y-%m-%dT%H:%M:%S).123456Z"
+					items="$(jq -cn --arg st "$FAKE_CODEX_SUMMARY" --arg sha "${FAKE_CODEX_SUMMARY_SHA:-${FAKE_HEAD:0:7}}" --arg now "$(now)" --arg since "$since" '
 						{user: {login: "chatgpt-codex-connector[bot]"}, created_at: $now, updated_at: $now,
 						 body: ("<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
 							+ "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
 							+ "| 📝 **Code Review** | "
 							+ (if $st == "Running" then "🔄 **Running** since" else "✅ **Completed**" end)
-							+ " <relative-time datetime=\"2026-10-06T21:55:21.778548Z\">2026-10-06T21:55:21.778548Z</relative-time> | `"
+							+ " <relative-time datetime=\"" + $since + "\">" + $since + "</relative-time> | `"
 							+ $sha + "` | Manual request |\n")}')"
 				fi
 				if [ -n "${FAKE_CODEX_COMMENT_AFTER:-}" ] && [ "$n" -ge "$FAKE_CODEX_COMMENT_AFTER" ]; then
@@ -225,6 +233,8 @@ run 5 --bogus
 check "unknown argument rejected" rc_is 64
 run 5 --ci-timeout abc
 check "non-numeric --ci-timeout rejected" rc_is 64
+run 5 --copilot-settle abc
+check "non-numeric --copilot-settle rejected" rc_is 64
 
 echo "== Copilot: gh pr edit registers (the documented CLI path)"
 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=2 run 5 --copilot-only --since 2026-09-20T00:00:00Z --timeout 5
@@ -317,6 +327,13 @@ check "exit 1 (timeout) while the summary only says Running" rc_is 1
 check "CODEX=timeout" has "^CODEX=timeout$"
 check "the poll line shows the summary state" has "codex=0 codex-summary=Running@${HEAD:0:7}"
 check "the timeout says Codex is still reviewing the head" has "Codex is still reviewing ${HEAD:0:7}"
+check "the timeout says for how long Codex has been running" has "says Running, for [0-9][0-9]* min)"
+check "past an hour it suggests going on without Codex" has "over 60 min. Going on without Codex is reasonable"
+check "and re-reading the threads before the next push" has "gate-threads.sh status 5 "
+
+FAKE_CODEX_SUMMARY=Running FAKE_CODEX_SUMMARY_SINCE=now run 5 --codex-only --request-codex --timeout 1
+check "a review running for minutes: the time is shown" has "says Running, for 0 min)"
+check "a review running for minutes: no suggestion to go on" hasnt "Going on without Codex"
 
 FAKE_CODEX_SUMMARY=Running FAKE_CODEX_AFTER=2 run 5 --codex-only --request-codex --timeout 120
 check "Running summary, then a review of the head: exit 0" rc_is 0
@@ -337,6 +354,30 @@ check "CODEX=responded" has "^CODEX=responded$"
 
 FAKE_CODEX_THUMBS=old run 5 --codex-only --request-codex --since 2026-09-20T00:00:00Z --timeout 1
 check "a thumbs-up from before T is an earlier round (exit 1)" rc_is 1
+
+echo "== Copilot reviews the same head twice (PR #281 / #282): the wait goes on for --copilot-settle"
+FAKE_COPILOT_AFTER=1 FAKE_COPILOT_SECOND_AFTER=3 run 5 --wait-only --copilot-only --timeout 900
+check "exit 0" rc_is 0
+check "announces the settle wait" has "every bot has responded; waiting 300s more"
+check "announces the second review" has "another Copilot review of ${HEAD:0:7} arrived (2 in all)"
+check "the second review restarts the window (2 + 5 polls of 60s)" call_count "sleep 60" 7
+check "COPILOT=responded" has "^COPILOT=responded$"
+check "DONE" has "^DONE$"
+
+FAKE_COPILOT_AFTER=1 run 5 --wait-only --copilot-only --timeout 900
+check "one review: exit 0 after the window" rc_is 0
+check "one review: waited the 300s window (5 x 60s)" call_count "sleep 60" 5
+check "one review: no second review announced" hasnt "another Copilot review"
+
+FAKE_COPILOT_AFTER=1 run 5 --wait-only --copilot-only --copilot-settle 0
+check "--copilot-settle 0: exit 0" rc_is 0
+check "--copilot-settle 0: stops at the first response" not_called "sleep 60"
+check "--copilot-settle 0: no settle message" hasnt "waiting 0s more"
+
+FAKE_COPILOT_AFTER=1 FAKE_CODEX_AFTER=12 run 5 --wait-only --timeout 900
+check "Copilot first, Codex 5 polls later: exit 0" rc_is 0
+check "the time waiting for Codex counts towards the window (5 polls, not 10)" call_count "sleep 60" 5
+check "no settle wait left once Codex answered" hasnt "every bot has responded; waiting"
 
 echo "== Copilot already pending before the run (leftover request)"
 FAKE_PENDING_INITIAL=1 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=30 run 5 --copilot-only --timeout 5
