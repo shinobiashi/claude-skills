@@ -17,8 +17,9 @@
  *   status and the product ID through pre_option_ filters. The client puts the key in the query string of
  *   its request URLs, which debug tools, proxies and access logs may record, so it never gets the real key:
  *   its requests to {{API_HOST}} are sent again with the real key in the POST body and without following
- *   redirects. The key and the product ID are never written to the database, and the client's license
- *   settings page is closed, so the key never shows on screen.
+ *   redirects. Only requests for this product ID at this API URL are taken, because a file generated for
+ *   another product gives its client the same placeholder. The key and the product ID are never written to
+ *   the database, and the client's license settings page is closed, so the key never shows on screen.
  * - On an administrator's admin page load, the site is activated on {{API_HOST}} when the key, product ID,
  *   instance or site address differs from the last successful activation, and the activation is checked
  *   once a day (the store drops it when the license expires, the subscription goes on hold, or it is removed
@@ -208,12 +209,13 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 		 * @return false|array<string, mixed>|WP_Error
 		 */
 		public function send_client_request( $preempt, $args, $url ) {
-			if ( false !== $preempt || ! is_array( $args ) || ! is_string( $url ) || wp_parse_url( $url, PHP_URL_HOST ) !== wp_parse_url( $this->api_url, PHP_URL_HOST ) ) {
+			if ( false !== $preempt || ! is_array( $args ) || ! is_string( $url ) || ! $this->is_api_endpoint( $url ) ) {
 				return $preempt;
 			}
 
+			// A file generated for another product on the same store gives its client the same placeholder.
 			parse_str( (string) wp_parse_url( $url, PHP_URL_QUERY ), $query );
-			if ( ! isset( $query['wc-api'], $query['api_key'] ) || 'wc-am-api' !== $query['wc-api'] || self::PLACEHOLDER_KEY !== $query['api_key'] ) {
+			if ( ! isset( $query['wc-api'], $query['api_key'], $query['product_id'] ) || 'wc-am-api' !== $query['wc-api'] || self::PLACEHOLDER_KEY !== $query['api_key'] || (string) $this->product_id !== $query['product_id'] ) {
 				return $preempt;
 			}
 
@@ -225,6 +227,21 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			$args['redirection'] = 0;
 
 			return wp_safe_remote_request( add_query_arg( 'wc-api', 'wc-am-api', $this->api_url ), $args );
+		}
+
+		/**
+		 * Tells whether a URL points at this file's API Manager: the same host and path, with or without the
+		 * trailing slash (the client keeps the API URL as the plugin passes it).
+		 *
+		 * @param string $url Request URL.
+		 * @return bool
+		 */
+		private function is_api_endpoint( $url ) {
+			$target = wp_parse_url( $url );
+			$store  = wp_parse_url( $this->api_url );
+
+			return isset( $target['host'], $store['host'] ) && $target['host'] === $store['host']
+				&& untrailingslashit( $target['path'] ?? '' ) === untrailingslashit( $store['path'] ?? '' );
 		}
 
 		/**

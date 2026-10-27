@@ -203,6 +203,13 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wc-am-internal-license`: テンプレート 1.2.1（クラス `AW_WC_AM_Internal_License_1_2_1`）。jp4wc-pro PR #19 の 2 回目の Codex の指摘（P2）を直した。
+  生成したファイルはどれもクライアントに同じ代わりの値を渡すのに、`send_client_request()` はホストだけで要求を見ていた。同じ販売サイトの
+  2 つの製品にそれぞれ置くと、先に読み込まれた方が他方の `status`・`update` の要求を自分のキーで送る。捕まえるのは、ホストとパスが API の
+  URL と同じ（末尾のスラッシュの有無は問わない。クライアントは URL を渡されたまま使う）で、`product_id` がこのファイルの商品 ID の要求だけにした。
+  `verify-wp-env.sh` の S1 に、クライアントと同じ形の「別の商品 ID」「同じホストの別のパス」の要求が代わりの値のままモックに届くことを
+  足した（53 件 pass）。それぞれの条件を外す変異で、対応する確認だけが落ちることを `mutate-check.sh --only` で確かめた。1.2.0 の
+  ファイルが 1 つでも残っていると、そのファイルが他の製品の要求を取るので、同じ販売サイトの製品を 2 つ以上入れているサイトでは全部 1.2.1 で生成し直す
 - `wc-am-internal-license`: テンプレート 1.2.0（クラス `AW_WC_AM_Internal_License_1_2_0`）。jp4wc-pro PR #19 の Codex の指摘（P2）を直した。
   同梱のクライアントは `status`・`update`・`plugininformation` の要求で、キーを URL のクエリ文字列に入れる。社内のキーは管理先のサイトで
   共有するので、デバッグ用のプラグイン（Query Monitor の HTTP の一覧など）・プロキシ・アクセスログに残ると、設定画面を閉じてキーを

@@ -71,8 +71,10 @@ PRODUCT_ID="$(conf product_id)"
 CLIENT_HAS_ID="$(conf client_has_product_id)"
 SETTINGS_PAGE="$(conf settings_page)"
 KEY_CONSTANT="$(conf key_constant)"
+API_URL="$(conf api_url)"
+PLACEHOLDER="$(sed -n "s/^[[:space:]]*const PLACEHOLDER_KEY = '\([a-z-]*\)';\$/\1/p" "$MU_PLUGIN")"
 MOCK_KEY="$(sed -n "s/^const WCAM_MOCK_KEY = '\([A-Za-z0-9]*\)';\$/\1/p" "$MOCK")"
-[ -n "$PLUGIN_FILE" ] && [ -n "$PRODUCT_ID" ] && [ -n "$CLIENT_HAS_ID" ] && [ -n "$KEY_CONSTANT" ] || die "cannot read the settings block of $MU_PLUGIN"
+[ -n "$PLUGIN_FILE" ] && [ -n "$PRODUCT_ID" ] && [ -n "$CLIENT_HAS_ID" ] && [ -n "$KEY_CONSTANT" ] && [ -n "$API_URL" ] && [ -n "$PLACEHOLDER" ] || die "cannot read the settings block of $MU_PLUGIN"
 [ -n "$MOCK_KEY" ] || die "cannot read the dummy key from $MOCK"
 # The key file must be as generated: a real key pasted in it is never copied onto the development site.
 EMPTY_DEFINE="define( '$KEY_CONSTANT', '' );"
@@ -222,6 +224,19 @@ LOCATION="$(curl -s -b "$JAR" -o /dev/null -w '%{http_code} %{redirect_url}' "$U
 case "$LOCATION" in "302 "*"/wp-admin/plugins.php") ok "the settings page sends you to the Plugins screen" ;; *) bad "the settings page sends you to the Plugins screen (got $LOCATION)" ;; esac
 RAW="$(client_options)"
 if printf '%s' "$RAW" | grep -q "verify0123456789abcdef"; then bad "the key is not in the database"; else ok "the key is not in the database"; fi
+# A file generated for another product gives its client the same placeholder: requests shaped like the client's
+# but for another product ID, or for another store on the same host, must reach the mock unchanged.
+wpcli option update wcam_mock_log '[]' --format=json >/dev/null
+wpeval "\$store = wp_parse_url( '$API_URL' ); \$other = \$store['scheme'] . '://' . \$store['host'] . ( isset( \$store['port'] ) ? ':' . \$store['port'] : '' ) . '/wcam-verify-other-store/'; foreach ( array( array( '$API_URL', $((PRODUCT_ID + 1)) ), array( \$other, $PRODUCT_ID ) ) as \$t ) { wp_safe_remote_post( add_query_arg( 'wc-api', 'wc-am-api', \$t[0] ) . '&' . http_build_query( array( 'wc_am_action' => 'status', 'api_key' => '$PLACEHOLDER', 'product_id' => \$t[1], 'product_parent_id' => \$t[1], 'instance' => 'wcam-verify-foreign', 'object' => 'verify' ) ) ); }" >/dev/null
+LOG="$(wpcli option get wcam_mock_log --format=json)"
+foreign_untouched() { # foreign_untouched PRODUCT_ID: the foreign request for that product ID reached the mock as the client sent it.
+	printf '%s' "$LOG" | python3 -I -c '
+import json, sys
+hits = [e for e in json.load(sys.stdin) if e.get("instance") == "wcam-verify-foreign" and str(e.get("product_id")) == sys.argv[1]]
+sys.exit(0 if len(hits) == 1 and hits[0]["key_in_url"] and not hits[0]["key_in_body"] and not hits[0]["key_ok"] else 1)' "$1"
+}
+if foreign_untouched "$((PRODUCT_ID + 1))"; then ok "a request for another product ID is not sent with this key"; else bad "a request for another product ID is not sent with this key"; printf '%s\n' "$LOG" | sed 's/^/         | /'; fi
+if foreign_untouched "$PRODUCT_ID"; then ok "a request for another store on the same host is not sent with this key"; else bad "a request for another store on the same host is not sent with this key"; printf '%s\n' "$LOG" | sed 's/^/         | /'; fi
 wpcli option update wcam_mock_log '[]' --format=json >/dev/null
 P="$(page plugins.php s1b)"
 [ "$(count_requests activate)" = "0" ] && ok "the next admin load does not activate again" || bad "the next admin load does not activate again"

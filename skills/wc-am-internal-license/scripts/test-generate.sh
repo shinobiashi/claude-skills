@@ -46,7 +46,7 @@ contains "API URL comes from the call" "$W/out/a.php" "'api_url'               =
 contains "key constant comes from the API host" "$W/out/a.php" "'key_constant'          => 'SHOP_EXAMPLE_INTERNAL_API_KEY',"
 contains "title comes from the call" "$W/out/a.php" "'title'                 => 'My Plugin',"
 contains "the usage line names the constant" "$W/out/a.php" "define( 'SHOP_EXAMPLE_INTERNAL_API_KEY',"
-contains "the class name carries the template version" "$W/out/a.php" "class AW_WC_AM_Internal_License_1_2_0 {"
+contains "the class name carries the template version" "$W/out/a.php" "class AW_WC_AM_Internal_License_1_2_1 {"
 contains "@package is the slug" "$W/out/a.php" "@package my-plugin"
 lacks "no placeholder is left" "$W/out/a.php" "{{"
 if command -v php >/dev/null 2>&1; then
