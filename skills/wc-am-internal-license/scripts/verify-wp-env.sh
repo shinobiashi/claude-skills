@@ -225,9 +225,10 @@ case "$LOCATION" in "302 "*"/wp-admin/plugins.php") ok "the settings page sends 
 RAW="$(client_options)"
 if printf '%s' "$RAW" | grep -q "verify0123456789abcdef"; then bad "the key is not in the database"; else ok "the key is not in the database"; fi
 # A file generated for another product gives its client the same placeholder: requests shaped like the client's
-# but for another product ID, or for another store on the same host, must reach the mock unchanged.
+# but for another product ID, or for another store on the same host, must reach the mock unchanged. On hosts the
+# client takes for staging it turns the certificate check off; its request must still be sent with the check on.
 wpcli option update wcam_mock_log '[]' --format=json >/dev/null
-wpeval "\$store = wp_parse_url( '$API_URL' ); \$other = \$store['scheme'] . '://' . \$store['host'] . ( isset( \$store['port'] ) ? ':' . \$store['port'] : '' ) . '/wcam-verify-other-store/'; foreach ( array( array( '$API_URL', $((PRODUCT_ID + 1)) ), array( \$other, $PRODUCT_ID ) ) as \$t ) { wp_safe_remote_post( add_query_arg( 'wc-api', 'wc-am-api', \$t[0] ) . '&' . http_build_query( array( 'wc_am_action' => 'status', 'api_key' => '$PLACEHOLDER', 'product_id' => \$t[1], 'product_parent_id' => \$t[1], 'instance' => 'wcam-verify-foreign', 'object' => 'verify' ) ) ); }" >/dev/null
+wpeval "\$store = wp_parse_url( '$API_URL' ); \$other = \$store['scheme'] . '://' . \$store['host'] . ( isset( \$store['port'] ) ? ':' . \$store['port'] : '' ) . '/wcam-verify-other-store/'; foreach ( array( array( '$API_URL', $((PRODUCT_ID + 1)), 'wcam-verify-foreign' ), array( \$other, $PRODUCT_ID, 'wcam-verify-foreign' ), array( '$API_URL', $PRODUCT_ID, 'wcam-verify-staging' ) ) as \$t ) { wp_safe_remote_post( add_query_arg( 'wc-api', 'wc-am-api', \$t[0] ) . '&' . http_build_query( array( 'wc_am_action' => 'status', 'api_key' => '$PLACEHOLDER', 'product_id' => \$t[1], 'product_parent_id' => \$t[1], 'instance' => \$t[2], 'object' => 'verify' ) ), array( 'sslverify' => false ) ); }" >/dev/null
 LOG="$(wpcli option get wcam_mock_log --format=json)"
 foreign_untouched() { # foreign_untouched PRODUCT_ID: the foreign request for that product ID reached the mock as the client sent it.
 	printf '%s' "$LOG" | python3 -I -c '
@@ -237,6 +238,14 @@ sys.exit(0 if len(hits) == 1 and hits[0]["key_in_url"] and not hits[0]["key_in_b
 }
 if foreign_untouched "$((PRODUCT_ID + 1))"; then ok "a request for another product ID is not sent with this key"; else bad "a request for another product ID is not sent with this key"; printf '%s\n' "$LOG" | sed 's/^/         | /'; fi
 if foreign_untouched "$PRODUCT_ID"; then ok "a request for another store on the same host is not sent with this key"; else bad "a request for another store on the same host is not sent with this key"; printf '%s\n' "$LOG" | sed 's/^/         | /'; fi
+if printf '%s' "$LOG" | python3 -I -c '
+import json, sys
+hits = [e for e in json.load(sys.stdin) if e.get("instance") == "wcam-verify-staging"]
+sys.exit(0 if len(hits) == 1 and hits[0]["key_in_body"] and not hits[0]["key_in_url"] and hits[0]["key_ok"] and hits[0].get("sslverify") is True else 1)'; then
+	ok "a client request made without the certificate check (staging hosts) is sent with the check on"
+else
+	bad "a client request made without the certificate check (staging hosts) is sent with the check on"; printf '%s\n' "$LOG" | sed 's/^/         | /'
+fi
 wpcli option update wcam_mock_log '[]' --format=json >/dev/null
 P="$(page plugins.php s1b)"
 [ "$(count_requests activate)" = "0" ] && ok "the next admin load does not activate again" || bad "the next admin load does not activate again"

@@ -25,7 +25,7 @@ import sys
 import tempfile
 from urllib.parse import urlparse
 
-TEMPLATE_VERSION = "1.2.1"
+TEMPLATE_VERSION = "1.2.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "..", "templates", "internal-license.php")
 MOCK_TEMPLATE = os.path.join(HERE, "..", "templates", "verify-mock.php")

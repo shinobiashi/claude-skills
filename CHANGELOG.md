@@ -203,6 +203,12 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wc-am-internal-license`: テンプレート 1.2.2（クラス `AW_WC_AM_Internal_License_1_2_2`）。jp4wc-pro PR #19 の 3 回目の Codex の指摘（P2）を直した。
+  同梱のクライアント（wc-am-client.php 2.12.2）は、ステージングと見たホスト（`.test`・`.local`・`.dev`、`*.wpengine.com`、`staging.` など）で
+  `sslverify` を `false` にする。`send_client_request()` はその引数のまま本物のキーを入れて送り直していたので、そうしたサイトでは販売サイトの
+  証明書を確かめずにキーを送っていた。送り直す要求は `sslverify` を必ず `true` にする（mu-plugin 自身の有効化・状態確認は、もともと既定の検証が
+  かかる）。`verify-wp-env.sh` の S1 に、検証を切ったクライアントの要求が検証をオンにして届くことを足し（54 件 pass）、モックのログに
+  `sslverify` を足した。その 1 行を外す変異で、足した確認だけが落ちることを `mutate-check.sh --only` で確かめた
 - `wc-am-internal-license`: テンプレート 1.2.1（クラス `AW_WC_AM_Internal_License_1_2_1`）。jp4wc-pro PR #19 の 2 回目の Codex の指摘（P2）を直した。
   生成したファイルはどれもクライアントに同じ代わりの値を渡すのに、`send_client_request()` はホストだけで要求を見ていた。同じ販売サイトの
   2 つの製品にそれぞれ置くと、先に読み込まれた方が他方の `status`・`update` の要求を自分のキーで送る。捕まえるのは、ホストとパスが API の

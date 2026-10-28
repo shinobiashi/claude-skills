@@ -16,8 +16,9 @@
  * - The bundled WooCommerce API Manager client (wc-am-client.php 2.x) reads a placeholder key, the activation
  *   status and the product ID through pre_option_ filters. The client puts the key in the query string of
  *   its request URLs, which debug tools, proxies and access logs may record, so it never gets the real key:
- *   its requests to {{API_HOST}} are sent again with the real key in the POST body and without following
- *   redirects. Only requests for this product ID at this API URL are taken, because a file generated for
+ *   its requests to {{API_HOST}} are sent again with the real key in the POST body, without following
+ *   redirects, and with the certificate checked (the client turns the check off on hosts it takes for
+ *   staging). Only requests for this product ID at this API URL are taken, because a file generated for
  *   another product gives its client the same placeholder. The key and the product ID are never written to
  *   the database, and the client's license settings page is closed, so the key never shows on screen.
  * - On an administrator's admin page load, the site is activated on {{API_HOST}} when the key, product ID,
@@ -201,7 +202,7 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 
 		/**
 		 * Sends a request of the client's to the API Manager again, with the real key in the POST body instead of
-		 * the placeholder in the URL, and without following redirects.
+		 * the placeholder in the URL, without following redirects, and with the certificate checked.
 		 *
 		 * @param false|array<string, mixed>|WP_Error $preempt Response to use instead of a request.
 		 * @param array<string, mixed>|mixed          $args    Request arguments.
@@ -225,6 +226,10 @@ if ( ! class_exists( 'AW_WC_AM_Internal_License_{{CLASS_VERSION}}' ) ) {
 			$args['method']      = 'POST';
 			$args['body']        = array_merge( is_array( $args['body'] ?? null ) ? $args['body'] : array(), $query );
 			$args['redirection'] = 0;
+
+			// The client turns the certificate check off on hosts it takes for staging (.test, *.wpengine.com, ...),
+			// and this request carries the real key.
+			$args['sslverify'] = true;
 
 			return wp_safe_remote_request( add_query_arg( 'wc-api', 'wc-am-api', $this->api_url ), $args );
 		}

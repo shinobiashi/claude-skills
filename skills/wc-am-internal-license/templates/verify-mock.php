@@ -57,6 +57,7 @@ add_filter(
 			'object'      => $params['object'] ?? null,
 			'version'     => $params['software_version'] ?? null,
 			'redirection' => $args['redirection'] ?? null,
+			'sslverify'   => $args['sslverify'] ?? null,
 		);
 		update_option( 'wcam_mock_log', $log, false );
 
