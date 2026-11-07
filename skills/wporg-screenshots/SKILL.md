@@ -98,7 +98,7 @@ capture.sh shoot
 | `format` | `png` か `jpg`（jpg は quality 90） | `png` |
 | `viewport` | `{ "width", "height" }`（全体を撮るので高さはスクロールで伸びる） | 1280 × 900 |
 | `error_selector` | 撮影を止めるエラーの通知の CSS セレクター | 上記 |
-| `shots[]` | `path`（tests サイトからのパス。`{KEY}` 可）・`wait_for`（描画し終わったことを示す英語の文言）・任意の `uncheck`（チェックを外すチェックボックスのラベル）・任意の `name`（ログ用） | — |
+| `shots[]` | `path`（tests サイトからのパス。`{KEY}` 可）・`wait_for`（描画し終わったことを示す英語の文言）・任意の `uncheck`（チェックを外すチェックボックスのラベル）・任意の `name`（ログ用）・任意の `settle_ms`（`networkidle` を待たず、`wait_for` の後にこのミリ秒だけ待つ。ブロックエディタの画面は権限確認の OPTIONS が Playwright で終わらず `networkidle` に届かない） | — |
 
 `shots[i]` が `screenshot-(i+1)` になる。順番と数は readme の `== Screenshots ==` に合わせる（キャプションを先に直す）。
 ハッシュだけが違う URL（`#/import` など）への移動は SPA を読み直さないので、各ショットは移動の後に読み込み直す。
@@ -128,6 +128,7 @@ setup.php を置いたら teardown.php も置く（無いと警告する）。�
 - `something of this skill is already installed`: 前回が強制終了した。`$C cleanup`。
 - `the teardown hook failed; keeping …`: teardown の失敗の原因を直して `$C cleanup`（モックは残っているので本物の API へは出ない）。
 - `waitFor` のタイムアウト: `wait_for` の文言が UI と違う、または画面が開けていない（Cookie が通らない・PHP のエラー）。tests サイトに管理者でログインして同じ画面を開いて確かめる。
+- `page.waitForLoadState: Timeout 30000ms exceeded`: `wait_for` は出たが、画面が通信を開いたまま `networkidle` に届かない（ブロックエディタ: 権限確認の OPTIONS が Playwright では終わらない）。そのショットに `"settle_ms": 3000` を付ける。
 - `… shows an error notice`: その画面の API 呼び出しが失敗している（モックにフィクスチャが無い API を呼んでいないか）。
 - `uses {KEY}, but the setup hook did not print KEY=`: setup の出力と `shots.json` の `{KEY}` が合っていない。
 - `Unsupported chromium channel` / Chrome が無い: `npx playwright install chromium` の後に `WPORG_SHOTS_CHANNEL= $C shoot`。
@@ -138,7 +139,7 @@ setup.php を置いたら teardown.php も置く（無いと警告する）。�
 |---|---|
 | `scripts/capture.sh` | 撮影の流れ・tests サイトへの設置と片付け（`shoot` / `status` / `cleanup`）。bash 3.2 で動く |
 | `scripts/config.cjs` | `shots.json` の検証（シェルが読める `KEY=value` の行に直す）と、setup の出力の `KEY=value` を JSON にする |
-| `scripts/shoot.cjs` | Playwright で撮る（Cookie でログイン → localStorage → 各ショット: 移動・再読み込み・`wait_for`・`uncheck`・エラーの通知の確認・全体の撮影） |
+| `scripts/shoot.cjs` | Playwright で撮る（Cookie でログイン → localStorage → 各ショット: 移動・再読み込み・`wait_for`・`networkidle`（`settle_ms` があればその時間）・`uncheck`・エラーの通知の確認・全体の撮影） |
 | `scripts/test-capture.sh` | シナリオテスト（偽の `npx`〔wp-env〕・`curl`・撮影で、順序・片付け・拒否を確かめる。wp-env もブラウザも要らない）。`bash scripts/test-capture.sh` |
 
 使用例: Cart Bridge JP（`artisanworkshop/cart-bridge-jp` の `.claude/wporg-screenshots/`）。モノレポの無料版を、Pro を無効にし、

@@ -31,14 +31,36 @@ usage() { sed -n '3,8p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ -f .wp-env.json ] || die "run this from the repository root (no .wp-env.json here)"
 
-# `wp-env install-path` is this repository's instance (~/.wp-env/<hash>). Fail when it is empty or
-# has no tests site: an empty value joined to a path would point at the host's root.
+# This repository's wp-env instance (~/.wp-env/<hash>): what `wp-env install-path` prints, or, from
+# wp-env 11 on, `installPath` of `wp-env status --json` (11.17 has no install-path command: it prints
+# its usage to stderr and exits 0). Only an absolute path counts.
+wpenv_install_path() {
+	local p status
+	p=$(npx wp-env install-path 2>/dev/null) || p=""
+	p=${p%$'\n'}
+	case "$p" in /*) ;; *) p="" ;; esac
+	if [ -z "$p" ]; then
+		status=$(npx wp-env status --json 2>/dev/null) || status=""
+		# The JSON is the last line (wp-env may print notices before it). Not JSON: nothing.
+		p=$(printf '%s\n' "$status" | tr -d '\r' | sed -n '$p' | node -e '
+			let data = "";
+			process.stdin.on("data", (chunk) => (data += chunk));
+			process.stdin.on("end", () => {
+				try { process.stdout.write(String(JSON.parse(data).installPath ?? "")); } catch { /* not JSON */ }
+			});
+		') || p=""
+		case "$p" in /*) ;; *) p="" ;; esac
+	fi
+	printf '%s\n' "$p"
+}
+
+# The tests site's mu-plugins on the host. Fail when the install path is empty or has no tests site:
+# an empty value joined to a path would point at the host's root.
 tests_mu_dir() {
 	local p
-	p=$(npx wp-env install-path 2>/dev/null) || { echo "npx wp-env install-path failed (is wp-env started for this repository?)" >&2; return 1; }
-	p=${p%$'\n'}
+	p=$(wpenv_install_path)
 	if [ -z "$p" ] || [ ! -d "$p/tests-WordPress" ]; then
-		echo "wp-env install path is empty or has no tests-WordPress directory: '$p' (npx wp-env start)" >&2
+		echo "wp-env install path is empty or has no tests-WordPress directory: '$p' (neither wp-env install-path nor wp-env status --json named one; npx wp-env start)" >&2
 		return 1
 	fi
 	printf '%s\n' "$p/tests-WordPress/wp-content/mu-plugins"

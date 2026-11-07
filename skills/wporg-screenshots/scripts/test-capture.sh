@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scenario tests for capture.sh and config.cjs: a throwaway repository, a fake `npx` (wp-env:
-# install-path and `run tests-cli wp …`), a fake curl and a fake shooter. No wp-env, no browser,
+# install-path, status and `run tests-cli wp …`), a fake curl and a fake shooter. No wp-env, no browser,
 # no network. Needs node. Usage: bash test-capture.sh
 set -uo pipefail
 
@@ -28,11 +28,20 @@ mkdir -p "$W/bin" "$W/wpenv/tests-WordPress/wp-content/mu-plugins"
 MU="$W/wpenv/tests-WordPress/wp-content/mu-plugins"
 cat > "$W/bin/npx" <<'EOF'
 #!/usr/bin/env bash
-# fake npx: wp-env install-path and `wp-env run tests-cli wp …`
+# fake npx: wp-env install-path, status and `wp-env run tests-cli wp …`
+# FAKE_WPENV11=1: install-path is gone (usage on stderr, exit 0) as in wp-env 11.17; FAKE_STATUS_NO_PATH=1:
+# `status --json` has no installPath.
 [ "$1" = wp-env ] || { echo "unexpected npx call: $*" >&2; exit 99; }
 shift
 case "$1" in
-  install-path) echo "$FAKE_WPENV"; exit 0 ;;
+  install-path)
+    if [ -n "${FAKE_WPENV11:-}" ]; then echo "wp-env <command>" >&2; exit 0; fi
+    echo "$FAKE_WPENV"; exit 0 ;;
+  status)
+    [ "${2:-}" = --json ] || { echo "unexpected wp-env status call: $*" >&2; exit 99; }
+    echo "notice: wp-env may print a line before the JSON"
+    if [ -n "${FAKE_STATUS_NO_PATH:-}" ]; then echo '{"status":"running"}'; else printf '{"status":"running","installPath":"%s"}\n' "$FAKE_WPENV"; fi
+    exit 0 ;;
   run) shift; [ "$1" = tests-cli ] || { echo "unexpected container: $1" >&2; exit 99; }; shift ;;
   *) echo "unexpected wp-env call: $*" >&2; exit 99 ;;
 esac
@@ -149,6 +158,10 @@ cfg '{ "shots": [ { "path": "wp-admin/", "wait_for": "x" } ] }'
 [ "$RC" -eq 2 ] && has 'must start with /'; check "a shot path without a leading / is refused" $?
 cfg '{ "shots": [ { "path": "/wp-admin/", "wait_for": " " } ] }'
 [ "$RC" -eq 2 ] && has 'wait_for must not be empty'; check "an empty wait_for is refused" $?
+cfg '{ "shots": [ { "path": "/wp-admin/", "wait_for": "x", "settle_ms": "3000" } ] }'
+[ "$RC" -eq 2 ] && has 'settle_ms must be a whole number'; check "settle_ms that is not a number is refused" $?
+cfg '{ "shots": [ { "path": "/wp-admin/", "wait_for": "x", "settle_ms": 3000 } ] }'
+[ "$RC" -eq 0 ]; check "settle_ms in milliseconds is accepted" $?
 cfg "{ $SHOT, \"format\": \"webp\" }"
 [ "$RC" -eq 2 ] && has 'png" or "jpg'; check "an unknown format is refused" $?
 cfg "{ $SHOT, \"setup_args\": [ \"a\\nb\" ] }"
@@ -289,6 +302,13 @@ export FAKE_EXT=jpg
 run shoot --out "$W/jpg"
 [ "$RC" -eq 0 ] && [ -f "$W/jpg/screenshot-2.jpg" ] && has 'screenshot-2\.jpg  The report\.'; check "format jpg writes .jpg" $?
 write_config
+
+echo "== wp-env 11 (no install-path command)"
+reset
+FAKE_WPENV11=1 run status
+[ "$RC" -eq 0 ] && has '^installed: no$'; check "the install path is read from wp-env status --json" $?
+FAKE_WPENV11=1 FAKE_STATUS_NO_PATH=1 run status
+[ "$RC" -ne 0 ] && has 'neither wp-env install-path nor wp-env status --json'; check "without a path from either command it refuses" $?
 
 echo "== arguments"
 reset

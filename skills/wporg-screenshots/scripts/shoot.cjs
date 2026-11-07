@@ -92,7 +92,13 @@ const cookies = JSON.parse( fs.readFileSync( cookiesFile, 'utf8' ) ).map( ( c ) 
 				throw new Error( 'the login cookies were not accepted (redirected to wp-login.php)' );
 			}
 			await page.getByText( shot.wait_for, { exact: false } ).first().waitFor( { timeout: 30000 } );
-			await page.waitForLoadState( 'networkidle' );
+			if ( undefined === shot.settle_ms ) {
+				await page.waitForLoadState( 'networkidle' );
+			} else {
+				// A screen that never goes network-idle (the block editor's OPTIONS permission checks stay open
+				// in Playwright) gets a fixed time after wait_for instead.
+				await page.waitForTimeout( shot.settle_ms );
+			}
 
 			for ( const name of shot.uncheck ?? [] ) {
 				const box = page.getByRole( 'checkbox', { name, exact: true } );

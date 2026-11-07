@@ -203,6 +203,15 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wporg-screenshots`: wp-env 11.17 で `capture.sh` が `wp-env install path is empty` で止まっていた。wp-env 11 は `install-path` コマンドを
+  無くし（使い方を stderr に出して終了コード 0）、インストール先は `wp-env status` の `install path:` の行に出す。`install-path` が絶対パスを
+  返さないときは `wp-env status --json` の `installPath` から読むようにした（テキストの行より書式の変化に強い。saai-signal-mail の
+  `bin/phpunit-mysql8.sh` と同じ読み方。どちらも名指ししなければ従来どおり止まる）。シナリオテスト 53 → 55 件（`--json` から読む・
+  どちらにも無いと止まる。前者は `installPath` の読み取りを壊すと落ちることを確かめた）。saai-signal-mail PR-28 の撮影で発覚。
+- `wporg-screenshots`: ブロックエディタの画面（`post.php?…&action=edit`）が `page.waitForLoadState: Timeout 30000ms exceeded` で撮れなかった。
+  エディタの権限確認の OPTIONS（`/wp/v2/settings` ほか）が Playwright では完了せず、`networkidle` に届かない（サーバーは即答している）。
+  ショットに任意の `settle_ms`（0〜60000）を足し、指定したショットは `networkidle` の代わりに `wait_for` の後でその時間だけ待つ。
+  `config.cjs` が整数かを検査する。シナリオテスト 55 → 57 件。saai-signal-mail PR-28 の撮影で発覚。
 - `review-loop`: `snapshot.sh diff R1 R2 -- <パス>` が何も出さなかった。オプションと `--` 以降をまとめて 2 つのコミットの前に
   渡していたので、`git diff -- <パス> R1 R2` になり、R1・R2 もパスとして読まれていた。オプションは 2 つのコミットの前、`--` からは
   後ろに渡すようにした（shinobiashi-ai PR #29 の review-loop で、R2 の差分をパスで絞ろうとして空振りした）。シナリオテスト 32 → 35 件

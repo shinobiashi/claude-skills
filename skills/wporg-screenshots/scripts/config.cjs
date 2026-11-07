@@ -23,7 +23,7 @@ const KNOWN = [
 	'plugin_dir', 'build', 'deactivate', 'activate', 'permalink', 'user', 'locale', 'setup_args',
 	'format', 'viewport', 'local_storage', 'error_selector', 'shots',
 ];
-const SHOT_KNOWN = [ 'path', 'wait_for', 'uncheck', 'name' ];
+const SHOT_KNOWN = [ 'path', 'wait_for', 'uncheck', 'name', 'settle_ms' ];
 const SLUG = /^[a-z0-9][a-z0-9_.-]*$/;
 
 function line( value, what ) {
@@ -141,6 +141,9 @@ function check( file ) {
 			fail( `shots[${ i }].wait_for must not be empty (the text that shows the screen has finished rendering)` );
 		}
 		strings( shot.uncheck, `shots[${ i }].uncheck` );
+		if ( undefined !== shot.settle_ms && ( ! Number.isInteger( shot.settle_ms ) || shot.settle_ms < 0 || shot.settle_ms > 60000 ) ) {
+			fail( `shots[${ i }].settle_ms must be a whole number of milliseconds from 0 to 60000` );
+		}
 		if ( undefined !== shot.name ) {
 			line( shot.name, `shots[${ i }].name` );
 		}
