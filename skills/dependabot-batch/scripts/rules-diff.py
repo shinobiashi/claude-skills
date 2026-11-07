@@ -1,0 +1,553 @@
+#!/usr/bin/env python3
+"""rules-diff.py — Compare what the lint, type and test tools really check in two trees.
+
+A tool major can keep CI green while it stops checking: wp-scripts 37 stopped reading
+.eslintrc.js, so a wrong text domain passed with exit 0 (saai-inventory #54). A green run cannot
+show that, so this asks each tool for its effective configuration in both trees and compares.
+
+Usage:
+  rules-diff.py --base DIR --head DIR [options]
+
+  --base DIR, --head DIR   two trees with their dependencies installed (npm ci, composer install)
+  --sample FILE            a file to ask ESLint or Stylelint about; repeat for more
+                           (default: one per file kind, source and test files apart)
+  --only TOOLS             comma list of eslint,stylelint,tsc,jest,playwright,phpcs,phpstan,
+                           phpunit,assets. Pass the side that changed: an npm-only update does
+                           not need composer install, if the PHP tools are left out.
+  --jest-config FILE       default: jest-unit.config.* or jest.config.*
+  --phpunit-config FILE    default: phpunit.xml(.dist)
+  --build-dir DIR          where *.asset.php lie (default: build, assets/build, dist)
+  --full                   list every name instead of the first 40 in a group
+  --json                   print the results as JSON
+
+Run it with the Node that CI uses (nvm use): the tools refuse or change behaviour on another one.
+
+A probe that fails on one side is a finding, never "no difference": a tool that cannot print its
+configuration may be a tool that cannot run. The same goes for a tool with a config in the tree
+but no binary: that is a skipped install. SKIPPED only means the project does not use the tool.
+PHPCS and the test runners are compared by what they list, so a sniff removed upstream shows up
+too: LOST means "look at this", not "this is broken". Jest lists files, not tests, and the counts
+compare the two trees; they are not the totals CI prints.
+
+SAME only speaks for what was compared: a helper the tools do not read leaves everything SAME.
+
+Exit status: 0 nothing lost; 1 something was lost, weakened, or could not be compared;
+2 a usage error.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+GENERATED = re.compile(r"(^|/)(node_modules|vendor|vendor-prefixed|build|dist)(/|$)|\.min\.")
+TEST_FILE = re.compile(r"\.(test|spec)\.|(^|/)__tests__/")
+CONFIG_FILE = re.compile(r"(^|/)\.[^/]*$|\.config\.[^/]*$")
+SNIFF = re.compile(r"^\s+([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\s*$")
+LEGACY_ESLINT = (".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json", ".eslintrc.yml", ".eslintrc.yaml")
+WP_CONFIG = "node_modules/@wordpress/scripts/config"
+ALL_TOOLS = ("eslint", "stylelint", "tsc", "jest", "playwright", "phpcs", "phpstan", "phpunit", "assets")
+PLAYWRIGHT_CONFIGS = ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs", "playwright.config.cjs")
+SEVERITY = {0: "off", 1: "warn", 2: "error", "0": "off", "1": "warn", "2": "error"}
+LIMIT = 40
+
+
+def run(cmd, cwd):
+    try:
+        done = subprocess.run(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600, stdin=subprocess.DEVNULL
+        )
+    except FileNotFoundError:
+        return 127, "", f"{cmd[0]}: not found"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+    return done.returncode, ANSI.sub("", done.stdout), ANSI.sub("", done.stderr)
+
+
+def tool_path(tree, relative):
+    path = os.path.join(tree, relative)
+    return path if os.path.exists(path) else None
+
+
+def first_error(*texts):
+    for text in texts:
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith(("(node:", "(Use `node", "Note: ")):
+                return line[:200]
+    return "no output"
+
+
+def tracked(tree):
+    code, out, _ = run(["git", "ls-files"], tree)
+    if code == 0 and out:
+        return out.splitlines()
+    found = []
+    for folder, dirs, files in os.walk(tree):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "vendor", ".git")]
+        found += [os.path.relpath(os.path.join(folder, name), tree) for name in files]
+    return found
+
+
+def scripts_use(tree, *words):
+    try:
+        with open(os.path.join(tree, "package.json"), encoding="utf-8") as handle:
+            scripts = json.load(handle).get("scripts", {})
+    except (OSError, ValueError):
+        return False
+    return any(word in str(value) for value in scripts.values() for word in words)
+
+
+def wp_scripts_runs(tree, command):
+    return scripts_use(tree, f"wp-scripts {command}")
+
+
+def missing_tool(subject, base, head, binary, configs):
+    """The result for an absent tool, or None. A config without its tool is a skipped install."""
+    old, new = tool_path(base, binary), tool_path(head, binary)
+    if old and new:
+        return None
+    found = next((name for name in configs if tool_path(base, name) or tool_path(head, name)), None)
+    if found or old or new:
+        reason = f"{found} is here" if found else "only one tree has it"
+        return [result(subject, "failed", [f"{reason}, but {binary} is missing: install the dependencies, or leave the tool out with --only"])]
+    return [result(subject, "skipped", ["not installed"])]
+
+
+def pick_samples(base, head, explicit, kinds):
+    """One real source file per kind, in both trees: a config file says nothing about the code."""
+    if explicit:
+        return [s for s in explicit if s.endswith(tuple(ext for ext, _ in kinds))]
+    common = set(tracked(base)) & set(tracked(head))
+    names = sorted(n for n in common if not GENERATED.search(n) and not CONFIG_FILE.search(n))
+    picked = []
+    for ext, is_test in kinds:
+        for name in names:
+            if name.endswith(ext) and bool(TEST_FILE.search(name)) == is_test:
+                picked.append(name)
+                break
+    return picked
+
+
+# ---- comparing rule maps ------------------------------------------------------------------------
+
+
+def normalize_rule(value):
+    """A rule as (severity, options): "error", 2, ["error", {...}] and [2, {...}] all occur."""
+    items = value if isinstance(value, list) else [value]
+    severity = SEVERITY.get(items[0], items[0]) if items else "off"
+    return severity, json.dumps(items[1:], sort_keys=True)
+
+
+def normalize_stylelint_rule(value):
+    """Stylelint: null is off, and the severity sits in the secondary options, default error."""
+    items = value if isinstance(value, list) else [value]
+    if not items or items[0] is None:
+        return "off", "[]"
+    secondary = items[1] if len(items) > 1 and isinstance(items[1], dict) else {}
+    severity = "warn" if secondary.get("severity") == "warning" else "error"
+    return severity, json.dumps(items, sort_keys=True)
+
+
+def compare_rules(base_rules, head_rules, normalize=normalize_rule):
+    base = {name: normalize(value) for name, value in base_rules.items()}
+    head = {name: normalize(value) for name, value in head_rules.items()}
+    active = lambda rule: rule is not None and rule[0] != "off"
+    diff = {"lost": [], "dropped": [], "gained": [], "weakened": [], "options": []}
+    for name in sorted(set(base) | set(head)):
+        old, new = base.get(name), head.get(name)
+        if active(old) and not active(new):
+            diff["lost"].append(name)
+        elif active(new) and not active(old):
+            diff["gained"].append(name)
+        elif active(old) and active(new):
+            if old[0] == "error" and new[0] == "warn":
+                diff["weakened"].append(name)
+            if old[1] != "[]" and new[1] == "[]":
+                diff["dropped"].append(f"{name} {old[1][:80]}")
+            elif old[1] != new[1]:
+                diff["options"].append(name)
+    diff["base_active"] = sum(1 for rule in base.values() if active(rule))
+    diff["head_active"] = sum(1 for rule in head.values() if active(rule))
+    return diff
+
+
+def compare_sets(base, head):
+    return {"lost": sorted(base - head), "gained": sorted(head - base)}
+
+
+# ---- probes: each returns {"subject", "status", "lines", "data"} --------------------------------
+# status: same, changed (look at it), lost (look harder), failed (cannot compare), skipped
+
+
+def result(subject, status, lines=(), data=None):
+    return {"subject": subject, "status": status, "lines": list(lines), "data": data or {}}
+
+
+def names(label, values, full):
+    shown = values if full else values[:LIMIT]
+    more = "" if len(shown) == len(values) else f" ... and {len(values) - len(shown)} more"
+    return f"{label} ({len(values)}): {' '.join(shown)}{more}"
+
+
+def rules_lines(diff, full):
+    lines = [f"active rules: base {diff['base_active']}, head {diff['head_active']}"]
+    labels = (("lost", "LOST"), ("weakened", "WEAKENED error->warn"), ("options", "OPTIONS changed"), ("gained", "gained"))
+    for key, label in labels:
+        if diff[key]:
+            lines.append(names(label, diff[key], full))
+    for entry in diff["dropped"]:
+        lines.insert(1, f"OPTIONS DROPPED: {entry}")
+    return lines
+
+
+def rules_status(diff):
+    if diff["lost"] or diff["weakened"] or diff["dropped"]:
+        return "lost"
+    return "changed" if diff["options"] or diff["gained"] else "same"
+
+
+def read_config(tree, sample, binary, bundled, command):
+    """(rules or None, source, error). wp-scripts passes its own config when it finds none."""
+    exe = tool_path(tree, binary)
+    if exe is None:
+        return None, None, "not installed"
+    code, out, err = run([exe, "--print-config", sample], tree)
+    source = "project config"
+    if code != 0 and wp_scripts_runs(tree, command):
+        for name, extra in bundled:
+            path = tool_path(tree, f"{WP_CONFIG}/{name}")
+            if path:
+                code, out, err = run([exe, *extra, "--config", path, "--print-config", sample], tree)
+                source = f"wp-scripts' bundled {name}"
+                if code == 0:
+                    break
+    if code != 0:
+        return None, None, first_error(err, out)
+    text = out.strip()
+    if text in ("", "undefined"):
+        return {}, f"{source}, file ignored", None
+    try:
+        return json.loads(text).get("rules", {}), source, None
+    except ValueError:
+        return None, None, "the output is not JSON"
+
+
+def probe_config(tool, base, head, samples, binary, bundled, command, full, normalize=normalize_rule):
+    results = []
+    for sample in samples:
+        old, old_source, old_err = read_config(base, sample, binary, bundled, command)
+        new, new_source, new_err = read_config(head, sample, binary, bundled, command)
+        if old_err == "not installed" and new_err == "not installed":
+            if scripts_use(base, tool, f"wp-scripts {command}"):
+                return [result(tool, "failed", [f"package.json runs it, but {binary} is missing: install the dependencies, or leave the tool out with --only"])]
+            return [result(tool, "skipped", ["not installed"])]
+        if old_err or new_err:
+            lines = [f"{side}: {err}" for side, err in (("base", old_err), ("head", new_err)) if err]
+            results.append(result(sample, "failed", lines))
+            continue
+        diff = compare_rules(old, new, normalize)
+        lines = rules_lines(diff, full)
+        status = rules_status(diff)
+        if old_source != new_source:
+            lines.insert(0, f"CONFIG SOURCE: base uses {old_source}, head uses {new_source}")
+            status = "lost"
+            ignored = [n for n in LEGACY_ESLINT if tool_path(head, n)] if tool == "eslint" else []
+            if ignored:
+                lines.insert(1, f"NOT READ: {' '.join(ignored)} is still in the head tree, but nothing loads it")
+        results.append(result(sample, status, lines, diff))
+    return results or [result(tool, "skipped", ["no sample file in both trees"])]
+
+
+def probe_eslint(base, head, explicit, full):
+    kinds = ((".tsx", False), (".ts", False), (".jsx", False), (".js", False), (".tsx", True), (".ts", True), (".js", True))
+    samples = pick_samples(base, head, explicit, kinds)
+    bundled = (("eslint.config.cjs", ()), (".eslintrc.js", ("--no-eslintrc",)))
+    return probe_config("eslint", base, head, samples, "node_modules/.bin/eslint", bundled, "lint-js", full)
+
+
+def probe_stylelint(base, head, explicit, full):
+    samples = pick_samples(base, head, explicit, ((".scss", False), (".css", False)))
+    bundled = ((".stylelintrc.json", ()),)
+    binary = "node_modules/.bin/stylelint"
+    return probe_config("stylelint", base, head, samples, binary, bundled, "lint-style", full, normalize_stylelint_rule)
+
+
+def tsc_config(tree):
+    code, out, err = run([tool_path(tree, "node_modules/.bin/tsc"), "--showConfig"], tree)
+    if code != 0:
+        return None, first_error(out, err)
+    try:
+        return json.loads(out), None
+    except ValueError:
+        return None, "the output is not JSON"
+
+
+def probe_tsc(base, head, full):
+    if not tool_path(base, "tsconfig.json"):
+        return [result("tsconfig", "skipped", ["no tsconfig.json"])]
+    missing = missing_tool("tsconfig", base, head, "node_modules/.bin/tsc", ("tsconfig.json",))
+    if missing:
+        return missing
+    old, old_err = tsc_config(base)
+    new, new_err = tsc_config(head)
+    if old_err or new_err:
+        return [result("tsconfig", "failed", [f"{s}: {e}" for s, e in (("base", old_err), ("head", new_err)) if e])]
+    old_opts, new_opts = old.get("compilerOptions", {}), new.get("compilerOptions", {})
+    changed = sorted(k for k in set(old_opts) | set(new_opts) if old_opts.get(k) != new_opts.get(k))
+    lines = [f"{k}: {old_opts.get(k)} -> {new_opts.get(k)}" for k in changed]
+    old_files, new_files = len(old.get("files", [])), len(new.get("files", []))
+    if old_files != new_files:
+        lines.append(f"files: {old_files} -> {new_files}")
+    status = "lost" if new_files < old_files else ("changed" if lines else "same")
+    return [result("tsconfig", status, lines, {"changed": changed})]
+
+
+def relative_lines(out, tree):
+    root = os.path.realpath(tree) + os.sep
+    return {line.strip().replace(root, "").replace(tree + os.sep, "") for line in out.splitlines() if line.strip()}
+
+
+def probe_list(subject, base, head, command_for, keep, full, label="tests listed", clean=lambda line: line):
+    """Compare what a test runner would run. An empty list on one side is a failure too."""
+    listed = []
+    for tree in (base, head):
+        code, out, err = run(command_for(tree), tree)
+        items = {clean(line) for line in relative_lines(out, tree) if keep(line)}
+        listed.append((code, items, first_error(err, out)))
+    (old_code, old, old_err), (new_code, new, new_err) = listed
+    failures = [f"{side}: {err}" for side, code, items, err in
+                (("base", old_code, old, old_err), ("head", new_code, new, new_err)) if code != 0 or not items]
+    if failures:
+        return [result(subject, "failed", failures)]
+    diff = compare_sets(old, new)
+    lines = [f"{label}: base {len(old)}, head {len(new)}"]
+    if diff["lost"]:
+        lines.append(names("LOST", diff["lost"], full))
+    if diff["gained"]:
+        lines.append(names("gained", diff["gained"], full))
+    return [result(subject, "lost" if diff["lost"] else ("changed" if diff["gained"] else "same"), lines, diff)]
+
+
+def probe_jest(base, head, config, full):
+    if not config:
+        for name in ("jest-unit.config.js", "jest-unit.config.cjs", "jest.config.js", "jest.config.cjs", "jest.config.ts", "jest.config.json"):
+            if tool_path(base, name):
+                config = name
+                break
+    if not config:
+        return [result("jest", "skipped", ["no Jest config (pass --jest-config)"])]
+    command = lambda tree: [os.path.join(tree, "node_modules/.bin/jest"), "--listTests", "--config", config]
+    keep = lambda line: not line.startswith(("Error", "at "))
+    return probe_list(f"jest ({config})", base, head, command, keep, full, label="test files listed")
+
+
+def probe_playwright(base, head, full):
+    if not any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
+        return [result("playwright", "skipped", ["no Playwright config"])]
+    binary = "node_modules/.bin/playwright"
+    missing = missing_tool("playwright", base, head, binary, PLAYWRIGHT_CONFIGS)
+    if missing:
+        return missing
+    command = lambda tree: [os.path.join(tree, binary), "test", "--list"]
+    # An edit above a test moves its line number; that is the same test.
+    clean = lambda line: re.sub(r":\d+:\d+", "", line)
+    return probe_list("playwright", base, head, command, lambda line: "\u203a" in line, full, clean=clean)
+
+
+def probe_phpunit(base, head, config, full):
+    missing = missing_tool("phpunit", base, head, "vendor/bin/phpunit", ("phpunit.xml", "phpunit.xml.dist"))
+    if missing:
+        return missing
+    args = ["--configuration", config] if config else []
+    command = lambda tree: [os.path.join(tree, "vendor/bin/phpunit"), *args, "--list-tests"]
+    return probe_list("phpunit", base, head, command, lambda line: line.startswith("- "), full)
+
+
+def sniffs(tree):
+    code, out, err = run([os.path.join(tree, "vendor/bin/phpcs"), "-e"], tree)
+    found = {m.group(1) for m in map(SNIFF.match, out.splitlines()) if m}
+    if code != 0 or not found:
+        return None, first_error(err, out)
+    return found, None
+
+
+def standards(tree):
+    _, out, _ = run([os.path.join(tree, "vendor/bin/phpcs"), "-i"], tree)
+    text = out.replace("The installed coding standards are", "").replace(" and ", ", ")
+    return {item.strip(" .\n") for item in text.split(",") if item.strip(" .\n")}
+
+
+def probe_phpcs(base, head, full):
+    configs = ("phpcs.xml", "phpcs.xml.dist", ".phpcs.xml", ".phpcs.xml.dist")
+    missing = missing_tool("phpcs", base, head, "vendor/bin/phpcs", configs)
+    if missing:
+        return missing
+    old, old_err = sniffs(base)
+    new, new_err = sniffs(head)
+    if old_err or new_err:
+        return [result("phpcs", "failed", [f"{s}: {e}" for s, e in (("base", old_err), ("head", new_err)) if e])]
+    diff = compare_sets(old, new)
+    lost_standards = sorted(standards(base) - standards(head))
+    lines = [f"sniffs: base {len(old)}, head {len(new)}"]
+    if diff["lost"]:
+        lines.append(names("LOST", diff["lost"], full))
+    if diff["gained"]:
+        lines.append(names("gained", diff["gained"], full))
+    if lost_standards:
+        lines.append(names("LOST standards", lost_standards, full))
+    lost = diff["lost"] or lost_standards
+    return [result("phpcs", "lost" if lost else ("changed" if diff["gained"] else "same"), lines, diff)]
+
+
+def phpstan_parameters(tree):
+    code, out, err = run([os.path.join(tree, "vendor/bin/phpstan"), "dump-parameters", "--json"], tree)
+    if code != 0:
+        return None, first_error(err, out)
+    text = out.replace(os.path.realpath(tree), "<root>").replace(tree, "<root>")
+    start = text.find("{")
+    try:
+        return json.loads(text[start:]), None
+    except ValueError:
+        return None, "the output is not JSON"
+
+
+def probe_phpstan(base, head, full):
+    missing = missing_tool("phpstan", base, head, "vendor/bin/phpstan", ("phpstan.neon", "phpstan.neon.dist"))
+    if missing:
+        return missing
+    old, old_err = phpstan_parameters(base)
+    new, new_err = phpstan_parameters(head)
+    if old_err or new_err:
+        return [result("phpstan", "failed", [f"{s}: {e}" for s, e in (("base", old_err), ("head", new_err)) if e])]
+    changed = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+    lines = []
+    for key in changed:
+        before, after = json.dumps(old.get(key), sort_keys=True), json.dumps(new.get(key), sort_keys=True)
+        lines.append(f"{key}: {before[:120]} -> {after[:120]}")
+    if not changed:
+        lines.append(f"level {old.get('level')}, same parameters")
+    level_dropped = str(new.get("level")) != str(old.get("level"))
+    return [result("phpstan", "lost" if level_dropped else ("changed" if changed else "same"), lines, {"changed": changed})]
+
+
+ASSET_DEPS = re.compile(r"""['"]dependencies['"]\s*=>\s*(?:array\(|\[)(.*?)(?:\)|\])""", re.S)
+
+
+def asset_entries(tree, build_dir):
+    folders = [build_dir] if build_dir else ["build", "assets/build", "dist"]
+    entries = {}
+    for folder in folders:
+        root = os.path.join(tree, folder)
+        for current, _, files in os.walk(root):
+            for name in files:
+                if name.endswith(".asset.php"):
+                    path = os.path.join(current, name)
+                    with open(path, encoding="utf-8") as handle:
+                        found = ASSET_DEPS.search(handle.read())
+                    deps = set(re.findall(r"""['"]([^'"]+)['"]""", found.group(1))) if found else set()
+                    entries[os.path.relpath(path, root)] = deps
+    return entries
+
+
+def probe_assets(base, head, build_dir, full):
+    old, new = asset_entries(base, build_dir), asset_entries(head, build_dir)
+    if not old or not new:
+        return [result("assets", "skipped", ["no *.asset.php in both trees (run the build in both, or pass --build-dir)"])]
+    lines = []
+    for entry in sorted(set(old) | set(new)):
+        if entry not in old or entry not in new:
+            lines.append(f"{entry}: only in {'head' if entry not in old else 'base'}")
+        elif old[entry] != new[entry]:
+            removed, added = sorted(old[entry] - new[entry]), sorted(new[entry] - old[entry])
+            lines.append(f"{entry}: dependencies -{removed} +{added}")
+    if not lines:
+        lines.append(f"{len(old)} entries, the same script dependencies")
+        return [result("assets", "same", lines)]
+    return [result("assets", "changed", lines)]
+
+
+# ---- report ---------------------------------------------------------------------------------------
+
+
+def merge_same(rows):
+    """Samples with the same answer print as one: the differences are what the reader looks for."""
+    merged = {}
+    for row in rows:
+        key = (row["status"], tuple(row["lines"]))
+        if key in merged:
+            merged[key]["subject"] += f", {row['subject']}"
+        else:
+            merged[key] = dict(row)
+    return list(merged.values())
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--base")
+    parser.add_argument("--head")
+    parser.add_argument("--sample", action="append", default=[])
+    parser.add_argument("--only", default=",".join(ALL_TOOLS))
+    parser.add_argument("--jest-config")
+    parser.add_argument("--phpunit-config")
+    parser.add_argument("--build-dir")
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("-h", "--help", action="store_true")
+    args = parser.parse_args()
+
+    if args.help:
+        print(__doc__)
+        return 0
+    if not args.base or not args.head:
+        print("rules-diff: --base and --head are required", file=sys.stderr)
+        return 2
+    for tree in (args.base, args.head):
+        if not os.path.isdir(tree):
+            print(f"rules-diff: no such directory: {tree}", file=sys.stderr)
+            return 2
+    tools = [t.strip() for t in args.only.split(",") if t.strip()]
+    unknown = [t for t in tools if t not in ALL_TOOLS]
+    if unknown:
+        print(f"rules-diff: unknown tool: {' '.join(unknown)}", file=sys.stderr)
+        return 2
+
+    base, head = os.path.abspath(args.base), os.path.abspath(args.head)
+    probes = {
+        "eslint": lambda: probe_eslint(base, head, args.sample, args.full),
+        "stylelint": lambda: probe_stylelint(base, head, args.sample, args.full),
+        "tsc": lambda: probe_tsc(base, head, args.full),
+        "jest": lambda: probe_jest(base, head, args.jest_config, args.full),
+        "playwright": lambda: probe_playwright(base, head, args.full),
+        "phpcs": lambda: probe_phpcs(base, head, args.full),
+        "phpstan": lambda: probe_phpstan(base, head, args.full),
+        "phpunit": lambda: probe_phpunit(base, head, args.phpunit_config, args.full),
+        "assets": lambda: probe_assets(base, head, args.build_dir, args.full),
+    }
+
+    report = {tool: merge_same(probes[tool]()) for tool in tools}
+    flagged = [r for rows in report.values() for r in rows if r["status"] in ("lost", "failed")]
+
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        code, out, _ = run(["node", "-v"], head)
+        print(f"node {out.strip() if code == 0 else 'not found'} · base {base} · head {head}")
+        for tool, rows in report.items():
+            for row in rows:
+                print(f"\n[{row['status'].upper()}] {tool}: {row['subject']}")
+                for line in row["lines"]:
+                    print(f"  {line}")
+        skipped = [t for t, rows in report.items() if all(r["status"] == "skipped" for r in rows)]
+        print(f"\nsummary: flagged={len(flagged)} skipped={' '.join(skipped) or 'none'}")
+        if any(row["status"] == "failed" for row in flagged):
+            print("hint: FAILED can also mean a CI preparation step was skipped (composer install, a build, Strauss)")
+
+    return 1 if flagged else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

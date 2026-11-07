@@ -169,6 +169,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`start-task`](skills/start-task/SKILL.md) | 「issue 作成 → ブランチ作成 → コミット → プッシュ → PR 作成」を一気通貫で行うタスク開始/完了フロー。ワーキングツリーに変更がある状態なら PR まで、変更… |
 | [`check-pr`](skills/check-pr/SKILL.md) | 指定した PR の head を scratchpad の worktree に取得し、PHPCS / PHPStan / PHPUnit の 3 点チェックを実行して結果を報… |
 | [`ci-triage`](skills/ci-triage/SKILL.md) | GitHub Actions の CI 失敗を「コード起因」か「インフラ起因（課金・ランナー・ ワークフロー設定・キャッシュ）」かに切り分けるスキル。失敗ジョブの所要時間と ス… |
+| [`dependabot-batch`](skills/dependabot-batch/SKILL.md) | Dependabot の PR をまとめて捌く。不安定テストと実害の切り分け、CI で走らなかったステップのローカル実行、有効ルールの差分確認（ツールの major が緑のまま検出力を失っていないか）、マージ順のシミュレーション、全部入りの確認までを通す… |
 | [`fix-copilot-review`](skills/fix-copilot-review/SKILL.md) | Fetch unresolved PR review comments from any bot reviewer — GitHub Copilot, Codex (chatg… |
 | [`post-merge`](skills/post-merge/SKILL.md) | PRがマージされた後の後始末を行う。デフォルトブランチの最新化、マージ済みローカルブランチとworktreeの片付け、今回の学びをCLAUDE.mdへ蒸留＋剪定、繰り返しパター… |
 | [`todo-progress`](skills/todo-progress/SKILL.md) | TODO.md などのチェックリストを節ごとに数え、`--check` で進捗サマリーの表（「完了 / 全体」「割合%」）と照らす。PR を作る前の進捗の数え直しに、どのリポジトリでも同じスクリプトを使う |
