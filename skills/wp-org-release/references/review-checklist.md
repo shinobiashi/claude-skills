@@ -25,6 +25,12 @@ Before submitting at `https://wordpress.org/plugins/developers/add/`:
 - [ ] No calling home without user consent
 - [ ] All external service usage is clearly disclosed
 - [ ] ZIP is 10 MB or smaller (form upload limit)
+- [ ] If the ZIP ships build output (minified JS/CSS from webpack, `@wordpress/scripts`
+      etc.) without its source, `readme.txt` names the public repository, the build
+      tooling, the rebuild commands, the `src -> build` mapping and any third-party
+      packages inside the bundles (see "9. Minified Files With No Matching
+      Human-Readable Source" below). The review tooling flags every unmatched
+      minified file, and a plugin that bundles its sources elsewhere forgets this
 
 ### Naming and Ownership (Guideline 17)
 

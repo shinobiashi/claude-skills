@@ -1,6 +1,6 @@
 ---
 name: wp-org-release
-version: "1.1.0"
+version: "1.1.1"
 description: "Use when publishing or releasing a WordPress plugin to the WordPress.org plugin directory: initial submission, responding to a plugin review and uploading a corrected version (including the undocumented \"Additional Information\" field on the submission form), SVN workflow (trunk/tags/assets), readme.txt management, banner/icon/screenshot assets, and Stable tag updates."
 compatibility: "Targets WordPress.org SVN-based plugin repository. Requires SVN client. Tested with WP-CLI 2.x and @wordpress/scripts for ZIP generation."
 ---

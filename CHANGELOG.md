@@ -384,6 +384,10 @@
   を明記した
 
 ### Changed
+- `wp-org-release`（1.1.1）: 提出前チェックリスト（`references/review-checklist.md`）に「ビルド生成物（minified JS / CSS）を
+  ソース抜きで zip に入れるなら、readme にリポジトリ・ビルドツール・再生成コマンド・`src -> build` の対応・バンドル内の第三者
+  パッケージを書く」を追加。却下理由 9 として本文には既にあったが、チェックリストに無かったため saai-signal-mail の 1.0.0 の readme
+  （`assets/src/` を除外して `assets/build/*.js` を同梱）がこの節を欠いたまま提出直前まで進んだ（2026-11-03、PR #41 で追加）
 - `dev-cycle`: `request-gate-review.sh` が Copilot の同じ HEAD への追加のレビューを待つようになった。
   - **何が起きていたか**: Copilot は同じ HEAD に、数分おいて新しい指摘つきの 2 本目のレビューを出すことがある
     （Japanized-for-WooCommerce PR #281・#282、2026-10-23。3〜4 分後）。待ちが最初の 1 本で終わるため、2 本目は
