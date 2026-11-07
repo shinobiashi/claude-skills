@@ -567,6 +567,68 @@ run detect
 run bump 0.2.0 --allow-dirty
 [ "$RC" -ne 0 ] && has "not among the carriers" && grep -q '^ \* Version: 0.1.0$' fresh.php && ! grep -q '0\.2\.0' readme.txt; check "bump refuses and writes nothing when the header is not a carrier" $?
 
+# ---- an Upgrade Notice entry written before the bump ---------------------
+# '= 1.1.0 =' under '== Upgrade Notice ==' has the form of a changelog heading
+# without a date; only the '== Changelog ==' section counts (JP4WC 3.0.0).
+echo "== upgrade notice"
+git init -q --bare "$W/notice.git"
+git clone -q "$W/notice.git" "$W/notice" 2>/dev/null
+cd "$W/notice"
+git config user.email t@example.com
+git config user.name tester
+git checkout -q -b main
+printf '<?php\n/**\n * Plugin Name: Notice\n * Version: 1.0.0\n */\n' > notice.php
+cat > readme.txt <<'EOF'
+=== Notice ===
+Stable tag: 1.0.0
+
+== Changelog ==
+
+= 1.0.0 - 2026-01-01 =
+* **Added** - First (#1)
+
+== Upgrade Notice ==
+
+= 1.1.0 =
+Read this before updating.
+EOF
+git add -A && git commit -q -m init && git push -q origin main 2>/dev/null
+git tag 1.0.0
+export FAKE_PRS=""
+NOTICE_BLOCK="$(awk '/^== Upgrade Notice ==/ { f = 1 } f' readme.txt)"
+
+git checkout -q -b release/1.1.0
+printf '* **Fixed** - Second (#2)\n' > "$W/n-entries.md"
+run bump 1.1.0 --date 2026-02-01 --entries "$W/n-entries.md"
+[ "$RC" -eq 0 ] && grep -q '^ \* Version: 1.1.0$' notice.php; check "bump is not refused by an Upgrade Notice heading for the new version" $?
+[ "$(awk '/^== Changelog ==/ { f = 1; next } f && /^= / { print; exit }' readme.txt)" = '= 1.1.0 - 2026-02-01 =' ] \
+	&& [ "$(awk '/^== Upgrade Notice ==/ { f = 1 } f' readme.txt)" = "$NOTICE_BLOCK" ]; check "the changelog heading goes into the Changelog section, the Upgrade Notice is untouched" $?
+printf '* **Fixed** - Third (#3)\n' > "$W/n-more.md"
+run add-entries "$W/n-more.md"
+[ "$RC" -eq 0 ] && [ "$(awk '/^= 1\.1\.0 - /{ f = 1; next } f { print; exit }' readme.txt | sed -n 1p)" = '* **Fixed** - Second (#2)' ] \
+	&& grep -q '^\* \*\*Fixed\*\* - Third (#3)$' readme.txt \
+	&& [ "$(awk '/^== Upgrade Notice ==/ { f = 1 } f' readme.txt)" = "$NOTICE_BLOCK" ]; check "add-entries writes under the changelog heading, not the Upgrade Notice" $?
+run check
+has '^OK +heading: = 1\.1\.0 - 2026-02-01 =$'; check "check reads the changelog heading" $?
+git commit -qam "bump 1.1.0"
+
+# a refused bump rewrites no version
+git checkout -q 1.0.0 -- notice.php
+run bump 1.1.0 --allow-dirty
+[ "$RC" -ne 0 ] && has 'already has a changelog heading for 1\.1\.0' && grep -q '^ \* Version: 1.0.0$' notice.php; check "bump refuses an existing changelog heading before rewriting any version" $?
+git checkout -q -- notice.php
+
+# versions bumped by hand on main, the changelog heading forgotten
+git checkout -q main
+for f in notice.php readme.txt; do
+	sed -e 's/Version: 1\.0\.0/Version: 1.1.0/' -e 's/^Stable tag: 1\.0\.0$/Stable tag: 1.1.0/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+done
+git commit -qam "by hand" && git push -q origin main 2>/dev/null
+run check
+[ "$RC" -ne 0 ] && has "^MISSING +readme\.txt has no '= 1\.1\.0" && ! has '^OK +heading'; check "check does not take the Upgrade Notice heading for the changelog heading" $?
+run tag 1.1.0 --dry-run
+[ "$RC" -ne 0 ] && has "has no '= 1\.1\.0"; check "tag refuses when only the Upgrade Notice has the version" $?
+
 echo ""
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

@@ -353,6 +353,17 @@ newest_heading_version() { # from the working tree
 	awk '/^== Changelog ==/ { f = 1; next } f && /^= / { v = $2; print v; exit }' "$README"
 }
 
+# The '== Changelog ==' section of the working tree's readme. A version's
+# heading is looked up only there: an '== Upgrade Notice ==' entry written
+# before the bump has the same '= x.y.z =' form.
+changelog_section() {
+	awk '/^== Changelog ==/ { f = 1; next } f && /^== / { exit } f { print }' "$README"
+}
+
+changelog_heading() { # $1 = version; its first changelog heading, empty when there is none
+	changelog_section | grep -E "^= $(regex_escape "$1")( |$)" | head -1 || true
+}
+
 # --- detect ----------------------------------------------------------------
 
 cmd_detect() {
@@ -512,7 +523,7 @@ rewrite_line() { # $1 = file, $2 = line number, $3 = old, $4 = new (first occurr
 
 insert_changelog_block() { # $1 = version, $2 = date ("" = a heading without one), $3 = entries file ("" = none)
 	local tmp
-	grep -qE "^= $(regex_escape "$1")( |$)" "$README" && die "$README already has a changelog heading for $1"
+	[ -z "$(changelog_heading "$1")" ] || die "$README already has a changelog heading for $1"
 	grep -q '^== Changelog ==' "$README" || die "$README has no '== Changelog ==' section"
 	tmp="$(mktemp)"
 	awk -v v="$1" -v d="$2" -v entries="$3" '
@@ -580,6 +591,10 @@ cmd_bump() {
 	else
 		[ -n "$date" ] || date="$(date +%Y-%m-%d)"
 	fi
+	# insert_changelog_block() refuses these too, but only after the versions
+	# are rewritten: refuse here first, so that nothing is left half bumped
+	grep -q '^== Changelog ==' "$README" || die "bump: $README has no '== Changelog ==' section"
+	[ -z "$(changelog_heading "$new")" ] || die "bump: $README already has a changelog heading for $new"
 
 	# Take the list before rewriting anything: git grep must not see a file
 	# that has already been bumped. package.json is handled by npm below, so
@@ -617,7 +632,7 @@ cmd_add_entries() {
 	changelog_file >/dev/null || die "add-entries: no $README"
 	[ -n "$version" ] || version="$(newest_heading_version)"
 	[ -n "$version" ] || die "add-entries: $README has no changelog heading"
-	grep -qE "^= $(regex_escape "$version")( |$)" "$README" || die "add-entries: no changelog heading for $version"
+	[ -n "$(changelog_heading "$version")" ] || die "add-entries: no changelog heading for $version"
 	tmp="$(mktemp)"
 	added="$(awk -v ve="$(regex_escape "$version")" -v entries="$file" '
 		BEGIN { n = 0; while ((getline line < entries) > 0) if (line != "") { n++; want[n] = line } }
@@ -626,8 +641,10 @@ cmd_add_entries() {
 			flushed = 1
 		}
 		{
+			if ($0 ~ /^== Changelog ==/) inlog = 1
+			else if ($0 ~ /^== /) inlog = 0
 			if (inblock && !flushed && ($0 == "" || $0 ~ /^= / || $0 ~ /^== /)) flush()
-			if ($0 ~ ("^= " ve "( |$)")) inblock = 1
+			if (inlog && $0 ~ ("^= " ve "( |$)")) inblock = 1
 			else if (inblock && !flushed) seen[$0] = 1
 			print
 		}
@@ -683,7 +700,7 @@ cmd_check() {
 	# 2. changelog heading: `= x.y.z - YYYY-MM-DD =`, or `= x.y.z =` in a readme
 	#    that writes no dates (both match the deploy workflow's '^= x.y.z ')
 	if [ -f "$README" ]; then
-		heading="$(grep -E "^= $(regex_escape "$version")( |$)" "$README" | head -1 || true)"
+		heading="$(changelog_heading "$version")"
 		if [ -z "$heading" ]; then
 			echo "MISSING  $README has no '= $version - <date> =' (or '= $version =') heading"; status=1
 		elif ! printf '%s' "$heading" | grep -qE "^= $(regex_escape "$version")( - [0-9]{4}-[0-9]{2}-[0-9]{2})? =$"; then
@@ -788,7 +805,10 @@ cmd_tag() {
 	[ "$head_version" = "$version" ] || die "tag: $PLUGIN says $head_version, not $version (merge the bump PR first)"
 	if [ -f "$README" ]; then
 		grep -qE "^Stable tag:[[:space:]]*$(regex_escape "$version")[[:space:]]*$" "$README" || die "tag: $README Stable tag is not $version"
-		grep -qE "^= $(regex_escape "$version") " "$README" || die "tag: $README has no '= $version - <date> =' (or '= $version =') heading (empty release body)"
+		case "$(changelog_heading "$version")" in
+			"= $version "*) ;;
+			*) die "tag: $README has no '= $version - <date> =' (or '= $version =') heading (empty release body)" ;;
+		esac
 	fi
 	git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag: $tag already exists locally"
 	[ -z "$(git ls-remote --tags "$remote" "refs/tags/$tag")" ] || die "tag: $tag already exists on $remote"

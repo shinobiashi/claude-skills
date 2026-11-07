@@ -203,6 +203,13 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `release-bump`: 版の見出しを readme.txt の `== Changelog ==` の中だけで探すようにした。bump の前に `== Upgrade Notice ==` へ
+  `= 3.0.0 =` を書いておいた JP4WC 3.0.0 で、`bump` が「changelog の見出しが既にある」と止まり、しかもその判定が版数の書き換えの
+  後にあったので、版数だけ書き換えた状態が残った。同じ取り違えで、changelog の見出しが無くても `check` は `OK heading`、`tag` は
+  前提検査を通していた（Release の本文が空になる。デプロイ workflow の awk は最初の `= x.y.z ` から読むので、Upgrade Notice が
+  changelog より後ろにある限り本文には混ざらない）。`add-entries` も、changelog に見出しが無いと Upgrade Notice の下へ書いた。
+  `bump` は見出しの重複を版数の書き換えより前に確かめる。シナリオテストに 7 件（新しい版の Upgrade Notice がある readme）を足し、
+  直す前のスクリプトでは 7 件とも落ちることを確かめた（129 件）
 - `wc-email-editor`: saai-signal-mail の SPIKE-1 / PR-17（2026-10-24、PHP 2.19.0 / JS 2.5.1、WooCommerce 10.0.6 / 11.2.1 で
   本体のブロックメールエディタ on / off）の実測に合わせて直した。§5 の共存ルールは、本体のフィーチャーフラグで判定する案をやめ、
   `init` 9 にフックテーブル（プレフィックス無しの `Bootstrap`、他プラグインのプレフィックス版）と
