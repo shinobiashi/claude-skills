@@ -349,6 +349,26 @@ status "the script's --config is compared" 0
 has "and named" "jest (tests/js/jest.config.js)"
 if grep -qx 'tests/js/jest.config.js' "$HEAD/jest-args"; then ok "and passed to Jest"; else bad "and passed to Jest"; fi
 
+# Two suites with other configs: picking one would compare the wrong suite and could read as SAME.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:e2e":"jest --config jest.e2e.config.js","test:unit":"jest"}}\n' >"$t/package.json"
+    stub_jest "$t" 0 src/a.test.ts
+done
+run --base "$BASE" --head "$HEAD" --only jest
+status "several Jest configs in the scripts is a failure, not a guess" 1
+has "names them and what to pass" "several configs (jest.e2e.config.js, its default config): pass --jest-config"
+
+# A wrapper's -c is not Jest's: concurrently -c names colours, dotenv -c an environment.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"dev":"concurrently -c blue,green \\"webpack --watch\\" \\"jest --watch\\"","env":"dotenv -c test -- jest --ci"}}\n' >"$t/package.json"
+    stub_jest "$t" 0 src/a.test.ts
+done
+run --base "$BASE" --head "$HEAD" --only jest
+status "a wrapper's -c is not taken for the config" 0
+has "the root config is compared" "jest (jest.config.js)"
+
 fresh
 printf '{"scripts":{"test":"jest --ci"}}\n' >"$BASE/package.json"
 run --base "$BASE" --head "$HEAD" --only jest

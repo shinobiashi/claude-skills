@@ -124,16 +124,37 @@ def wp_scripts_runs(tree, command):
     return scripts_use(tree, f"wp-scripts {command}")
 
 
-def script_config(tree, *commands):
-    """The config a package.json script hands to one of these commands (--config X, -c X):
-    with one, wp-scripts runs it instead of its bundled config, so that is what to compare."""
+JEST_COMMANDS = (r"wp-scripts test-unit-js", r"(?<![\w@/.-])jest(?![\w.-])")
+PLAYWRIGHT_COMMANDS = (r"wp-scripts test-playwright", r"(?<![\w@/.-])playwright test")
+
+
+def script_configs(tree, commands):
+    """What package.json scripts hand to one of these commands: the path after --config / -c,
+    or None for a script that runs it without one. Only flags after the command count, so the
+    -c of a wrapper (concurrently, dotenv) is not taken for the tool's."""
+    found = []
     for value in package_json(tree).get("scripts", {}).values():
         for segment in re.split(r"&&|\|\||;", str(value)):
-            if any(command in segment for command in commands):
-                found = re.search(r"(?:--config[=\s]|\s-c\s)\s*(['\"]?)([^\s'\"]+)\1", segment)
-                if found:
-                    return found.group(2)
-    return None
+            starts = [m.start() for m in (re.search(c, segment) for c in commands) if m]
+            if not starts:
+                continue
+            match = re.search(r"(?:--config[=\s]|\s-c\s)\s*(['\"]?)([^\s'\"]+)\1", segment[min(starts):])
+            config = match.group(2) if match else None
+            if config not in found:
+                found.append(config)
+    return found
+
+
+def script_config(tree, subject, commands, option):
+    """(config or None, failure or None). With a --config in a script, wp-scripts runs it instead
+    of its bundled config, so that is what to compare. Two suites with other configs (a unit and an
+    e2e script) cannot be told apart here: comparing the wrong one would read as SAME."""
+    found = script_configs(tree, commands)
+    passed = [config for config in found if config]
+    if len(found) > 1 and passed:
+        listed = ", ".join(config or "its default config" for config in found)
+        return None, result(subject, "failed", [f"package.json runs it with several configs ({listed}): pass {option}"])
+    return (passed[0] if passed else None), None
 
 
 def missing_tool(subject, base, head, binary, configs):
@@ -400,8 +421,11 @@ def bundled_jest_config(tree):
 
 
 def probe_jest(base, head, config, full):
-    config = (config or script_config(base, "wp-scripts test-unit-js", "jest ")
-              or next((name for name in JEST_CONFIGS if tool_path(base, name)), None))
+    if not config:
+        config, failure = script_config(base, "jest", JEST_COMMANDS, "--jest-config")
+        if failure:
+            return [failure]
+    config = config or next((name for name in JEST_CONFIGS if tool_path(base, name)), None)
     if config:
         label, args = config, {base: ["--config", config], head: ["--config", config]}
     elif "jest" in package_json(base):
@@ -428,7 +452,10 @@ def probe_jest(base, head, config, full):
 def probe_playwright(base, head, config, full):
     binary = "node_modules/.bin/playwright"
     bundled = f"{WP_CONFIG}/playwright.config.js"
-    config = config or script_config(base, "wp-scripts test-playwright", "playwright test")
+    if not config:
+        config, failure = script_config(base, "playwright", PLAYWRIGHT_COMMANDS, "--playwright-config")
+        if failure:
+            return [failure]
     if config:
         subject, args = f"playwright ({config})", ["--config", config]
     elif any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
