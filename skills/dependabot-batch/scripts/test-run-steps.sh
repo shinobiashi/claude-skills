@@ -105,6 +105,35 @@ while read -r pid; do
 done <"$YES_PIDS"
 if [ "$alive" -eq 0 ]; then ok "the load stops with the script"; else bad "the load stops with the script ($alive left)"; fi
 
+# Killed outright, the script runs no trap: the watchdog has to stop the load.
+: >"$YES_PIDS"
+PATH="$W/yes:$PATH" bash "$SCRIPT" --dir "$W/tree" --log-dir "$W/l11" --load -- 'echo $$ >step.pid; exec sleep 30' >/dev/null 2>&1 &
+victim=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$YES_PIDS" ] && [ -s "$W/tree/step.pid" ] && break
+    sleep 1
+done
+kill -9 "$victim" 2>/dev/null
+wait "$victim" 2>/dev/null
+alive=0
+for _ in 1 2 3 4 5; do
+    sleep 1
+    alive=0
+    while read -r pid; do
+        kill -0 "$pid" 2>/dev/null && alive=$((alive + 1))
+    done <"$YES_PIDS"
+    [ "$alive" -eq 0 ] && break
+done
+if [ -s "$YES_PIDS" ] && [ "$alive" -eq 0 ]; then
+    ok "the load stops even when the script is killed with SIGKILL"
+else
+    bad "the load stops even when the script is killed with SIGKILL ($alive left)"
+fi
+# The step itself is the caller's to stop; do not leave it behind in the test.
+[ ! -s "$W/tree/step.pid" ] || kill "$(cat "$W/tree/step.pid")" 2>/dev/null
+while read -r pid; do kill "$pid" 2>/dev/null; done <"$YES_PIDS"
+rm -f "$W/tree/step.pid"
+
 echo "== usage"
 run
 status "no command is a usage error" 2

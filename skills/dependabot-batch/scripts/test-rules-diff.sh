@@ -118,7 +118,26 @@ status "falling back to the bundled config exits 1, even with equal rules" 1
 has "says so" "CONFIG SOURCE: base uses project config, head uses wp-scripts' bundled eslint.config.cjs"
 has "names the file nothing reads" "NOT READ: .eslintrc.js is still in the head tree"
 
+# No project config on either side: a bundled file with another name is not the project losing its config.
+fresh
+rm "$BASE/.eslintrc.js" "$HEAD/.eslintrc.js"
+for t in "$BASE" "$HEAD"; do
+    printf '{"rules":{"a":"error"}}\n' >"$t/stub/eslint-bundled.json"
+    mkdir -p "$t/node_modules/@wordpress/scripts/config"
+done
+: >"$BASE/node_modules/@wordpress/scripts/config/.eslintrc.js"
+: >"$HEAD/node_modules/@wordpress/scripts/config/eslint.config.cjs"
+ES --sample src/app.tsx
+status "bundled on both sides under other names is no finding" 0
+hasnt "no source change" "CONFIG SOURCE"
+has "the names still show" "config: base uses wp-scripts' bundled .eslintrc.js, head uses wp-scripts' bundled eslint.config.cjs"
+
 # Without wp-scripts in the lint command, the bundled config is not what runs.
+fresh
+eslint_rules "$BASE" '{"a":"error"}'
+printf '{"rules":{"a":"error"}}\n' >"$HEAD/stub/eslint-bundled.json"
+mkdir -p "$HEAD/node_modules/@wordpress/scripts/config"
+: >"$HEAD/node_modules/@wordpress/scripts/config/eslint.config.cjs"
 printf '{"scripts":{"lint:js":"eslint ."}}\n' >"$HEAD/package.json"
 ES --sample src/app.tsx
 status "no wp-scripts, no fallback: the probe failed" 1
@@ -191,6 +210,14 @@ run --base "$BASE" --head "$HEAD" --only stylelint
 status "the bundled config on both sides is no finding" 0
 hasnt "no source change" "CONFIG SOURCE"
 
+# A shared config can make every rule a warning without touching a single rule entry.
+fresh
+printf '{"rules":{"a":["always"],"b":["x",{"severity":"error"}]}}\n' >"$BASE/stub/stylelint.json"
+printf '{"defaultSeverity":"warning","rules":{"a":["always"],"b":["x",{"severity":"error"}]}}\n' >"$HEAD/stub/stylelint.json"
+run --base "$BASE" --head "$HEAD" --only stylelint
+status "defaultSeverity warning exits 1" 1
+has "the rules without a severity of their own read as weakened" "WEAKENED error->warn (1): a"
+
 echo "== tsc"
 fresh
 stub_tsc() { # stub_tsc TREE JSON
@@ -203,11 +230,24 @@ EOF
     chmod +x "$1/node_modules/.bin/tsc"
     : >"$1/tsconfig.json"
 }
-stub_tsc "$BASE" '{"compilerOptions":{"strict":true},"files":["a.ts","b.ts"]}'
-stub_tsc "$HEAD" '{"compilerOptions":{"strict":false},"files":["a.ts","b.ts"]}'
+stub_tsc "$BASE" '{"compilerOptions":{"strict":true,"target":"es2020"},"files":["a.ts","b.ts"]}'
+stub_tsc "$HEAD" '{"compilerOptions":{"strict":true,"target":"es2022"},"files":["a.ts","b.ts"]}'
 run --base "$BASE" --head "$HEAD" --only tsc
 status "a changed option does not fail by itself" 0
-has "shows the change" "strict: True -> False"
+has "shows the change" "target: es2020 -> es2022"
+stub_tsc "$HEAD" '{"compilerOptions":{"strict":false,"target":"es2020"},"files":["a.ts","b.ts"]}'
+run --base "$BASE" --head "$HEAD" --only tsc
+status "strict turned off exits 1" 1
+has "reads as weakened, with the checks strict covered" "WEAKENED checks no longer on (10): strict noImplicitAny"
+stub_tsc "$HEAD" '{"compilerOptions":{"strict":true,"noImplicitAny":false,"target":"es2020"},"files":["a.ts","b.ts"]}'
+run --base "$BASE" --head "$HEAD" --only tsc
+status "one check turned off under strict exits 1" 1
+has "names it" "WEAKENED checks no longer on (1): noImplicitAny"
+stub_tsc "$BASE" '{"compilerOptions":{"target":"es2020"},"files":["a.ts","b.ts"]}'
+stub_tsc "$HEAD" '{"compilerOptions":{"strict":true,"target":"es2020"},"files":["a.ts","b.ts"]}'
+run --base "$BASE" --head "$HEAD" --only tsc
+status "strict turned on is no loss" 0
+stub_tsc "$BASE" '{"compilerOptions":{"strict":true},"files":["a.ts","b.ts"]}'
 stub_tsc "$HEAD" '{"compilerOptions":{"strict":true},"files":["a.ts"]}'
 run --base "$BASE" --head "$HEAD" --only tsc
 status "fewer files exits 1" 1
@@ -249,6 +289,61 @@ run --base "$BASE" --head "$HEAD" --only jest
 status "no Jest config is a skip" 0
 has "says so" "no Jest config"
 
+# Where else the config can be: a jest key in package.json, or wp-scripts' bundled config.
+stub_jest_args() { # stub_jest_args TREE: lists one test and records the arguments it got
+    cat >"$1/node_modules/.bin/jest" <<EOF
+#!/bin/sh
+printf '%s\n' "\$@" >"$1/jest-args"
+echo "$1/src/a.test.ts"
+EOF
+    chmod +x "$1/node_modules/.bin/jest"
+}
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test":"jest"},"jest":{"testMatch":["**/*.test.ts"]}}\n' >"$t/package.json"
+    stub_jest_args "$t"
+done
+run --base "$BASE" --head "$HEAD" --only jest
+status "a jest key in package.json is a config" 0
+has "says where it came from" "[SAME] jest: jest (package.json)"
+if [ ! -s "$HEAD/jest-args" ] || ! grep -q -- '--config' "$HEAD/jest-args"; then
+    ok "and Jest is left to read the key itself"
+else
+    bad "and Jest is left to read the key itself"
+fi
+
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:unit":"wp-scripts test-unit-js"}}\n' >"$t/package.json"
+    stub_jest_args "$t"
+done
+run --base "$BASE" --head "$HEAD" --only jest
+status "wp-scripts with its bundled config missing is a failure, not a skip" 1
+has "says what is missing" "jest-unit.config.js is missing"
+if command -v node >/dev/null 2>&1; then
+    for t in "$BASE" "$HEAD"; do
+        mkdir -p "$t/node_modules/@wordpress/scripts/config"
+        printf 'module.exports = { preset: "@wordpress/jest-preset-default" };\n' \
+            >"$t/node_modules/@wordpress/scripts/config/jest-unit.config.js"
+    done
+    run --base "$BASE" --head "$HEAD" --only jest
+    status "wp-scripts' bundled Jest config is used when the project has none" 0
+    has "says so" "jest (wp-scripts' bundled jest-unit.config.js)"
+    if grep -qF '{"preset":"@wordpress/jest-preset-default"}' "$HEAD/jest-args"; then
+        ok "the config goes in as JSON, as wp-scripts passes it"
+    else
+        bad "the config goes in as JSON, as wp-scripts passes it"
+    fi
+else
+    echo "  (node not found: the bundled Jest config cases are not run)"
+fi
+
+fresh
+printf '{"scripts":{"test":"jest --ci"}}\n' >"$BASE/package.json"
+run --base "$BASE" --head "$HEAD" --only jest
+status "package.json runs Jest but no config is found: a failure" 1
+has "says what to pass" "pass --jest-config"
+
 echo "== playwright"
 fresh
 stub_playwright() { # stub_playwright TREE LINES...
@@ -280,6 +375,33 @@ fresh
 run --base "$BASE" --head "$HEAD" --only playwright
 status "no Playwright config is a skip" 0
 has "says so" "no Playwright config"
+
+# wp-scripts test-playwright runs its bundled config when the project has none.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:e2e":"wp-scripts test-playwright"}}\n' >"$t/package.json"
+done
+run --base "$BASE" --head "$HEAD" --only playwright
+status "wp-scripts' bundled Playwright config missing is a failure" 1
+for t in "$BASE" "$HEAD"; do
+    stub_playwright "$t" "specs/a.spec.ts:10:5 › opens"
+    rm "$t/playwright.config.ts"
+    printf 'printf "%%s\\n" "$@" >"%s/pw-args"\n' "$t" >>"$t/node_modules/.bin/playwright"
+    mkdir -p "$t/node_modules/@wordpress/scripts/config"
+    : >"$t/node_modules/@wordpress/scripts/config/playwright.config.js"
+done
+run --base "$BASE" --head "$HEAD" --only playwright
+status "the bundled config lists the tests" 0
+has "says which config" "playwright (wp-scripts' bundled playwright.config.js)"
+if grep -qx 'node_modules/@wordpress/scripts/config/playwright.config.js' "$HEAD/pw-args"; then
+    ok "and passes it as wp-scripts does"
+else
+    bad "and passes it as wp-scripts does"
+fi
+fresh
+printf '{"scripts":{"test:e2e":"playwright test"}}\n' >"$BASE/package.json"
+run --base "$BASE" --head "$HEAD" --only playwright
+status "package.json runs Playwright but no config is found: a failure" 1
 
 echo "== phpcs"
 fresh
@@ -392,7 +514,15 @@ has "shows the change" "a.asset.php: dependencies -['wp-i18n'] +['wp-url']"
 has "shows a new entry" "b.asset.php: only in head"
 rm "$BASE"/assets/build/*.php
 run --base "$BASE" --head "$HEAD" --only assets
-has "no build on one side is a skip that says what to do" "run the build in both"
+status "*.asset.php on one side only is a failure" 1
+has "and says what to do" "only the head has *.asset.php: run the build in both trees"
+rm "$HEAD"/assets/build/*.php
+run --base "$BASE" --head "$HEAD" --only assets
+status "no build output in a project that does not build is a skip" 0
+printf '{"scripts":{"build":"wp-scripts build"}}\n' >"$BASE/package.json"
+run --base "$BASE" --head "$HEAD" --only assets
+status "no build output in a project that builds is a failure" 1
+has "says what to do" "run the build in both trees, or pass --build-dir"
 
 echo "== output"
 fresh

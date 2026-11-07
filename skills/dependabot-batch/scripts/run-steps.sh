@@ -89,6 +89,11 @@ if [ "$LOAD" -eq 1 ]; then
         LOAD_PIDS="$LOAD_PIDS $!"
         i=$((i + 1))
     done
+    # The traps do not run when this script is killed outright (SIGKILL, a tool's timeout), so a
+    # watchdog stops the load once the script is gone. $$ is this script's pid in the subshell too.
+    # shellcheck disable=SC2086  # a space-separated list of pids
+    ( while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $LOAD_PIDS 2>/dev/null ) >/dev/null 2>&1 &
+    LOAD_PIDS="$LOAD_PIDS $!"
     echo "load: $cpus busy loops"
 fi
 

@@ -42,6 +42,11 @@ TOOL = re.compile(
 )
 # These run the suites instead of defining them, so comparing lint rules says nothing about them.
 TEST_ENV = re.compile(r"^(playwright|@playwright/|@wordpress/(env|e2e-test-utils))")
+# These write what ships: the bundles and the *.asset.php dependency lists.
+BUILD = re.compile(
+    r"^(webpack|webpack-cli|babel-loader|@babel/|esbuild|rollup|vite|terser|postcss|sass|"
+    r"@wordpress/(scripts|babel-preset-default|dependency-extraction-webpack-plugin))(/|$)"
+)
 LOG_PREFIX = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 SIGNATURE = re.compile(r"●|##\[error\]|^\s*FAIL\b|^\d+\) |error TS\d+|^\s+\d+:\d+\s+error\b")
@@ -172,8 +177,8 @@ def summarize_update(pr):
 
 
 def step_view(job):
-    """A job's steps as failed / never reached / skipped by a condition. Post steps are noise."""
-    failed, unreached, conditional = [], [], []
+    """A job's steps as ran / failed / never reached / skipped by a condition. Post steps are noise."""
+    ran, failed, unreached, conditional = [], [], [], []
     for step in job.get("steps", []):
         name, conclusion = step.get("name", ""), step.get("conclusion")
         if name.startswith("Post ") or name in ("Set up job", "Complete job"):
@@ -182,8 +187,20 @@ def step_view(job):
             failed.append(name)
         elif conclusion == "skipped":
             (unreached if failed else conditional).append(name)
-    return {"job": job.get("name"), "conclusion": job.get("conclusion"), "failed": failed,
+        elif conclusion in ("success", "neutral"):
+            ran.append(name)
+    return {"job": job.get("name"), "conclusion": job.get("conclusion"), "ran": ran, "failed": failed,
             "unreached": unreached, "conditional": conditional}
+
+
+def mark_skipped_jobs(views):
+    """A job skipped as a whole has no steps. After a failure in the run it never got its turn
+    (`needs:`); otherwise a condition kept it out (`if:` on the job, such as a tag-only release)."""
+    run_failed = any(v["failed"] or v["conclusion"] in ("failure", "timed_out", "cancelled") for v in views)
+    for view in views:
+        if view["conclusion"] == "skipped" and not (view["ran"] or view["failed"] or view["unreached"] or view["conditional"]):
+            view["skipped_job"] = "unreached" if run_failed else "conditional"
+    return views
 
 
 def signatures(run_id, attempt):
@@ -210,20 +227,21 @@ def inspect_ci(repo, pr, workflows):
     head = pr["headRefOid"]
     runs = gh_json("api", f"repos/{repo}/actions/runs?branch={pr['headRefName']}&per_page=50").get("workflow_runs", [])
     runs = [r for r in runs if str(r.get("path", "")).startswith(".github/")]
+    # One run per workflow and event: `on: [push, pull_request]` runs a workflow twice on the
+    # same head, and a red push run must not hide behind a green pull_request run.
     latest = {}
     for run in sorted(runs, key=lambda r: r.get("created_at", "")):
         if run.get("head_sha") == head:
-            latest[run["path"]] = run
+            latest[(run["path"], run.get("event"))] = run
 
     ci = {"state": "none", "jobs": [], "retried": [], "older_failures": [], "not_triggered": []}
     states = []
-    for path, run in latest.items():
+    for (path, _), run in latest.items():
         if run.get("status") != "completed":
             states.append("pending")
         else:
             states.append({"success": "pass", "failure": "fail"}.get(run.get("conclusion"), run.get("conclusion")))
-        for job in jobs_of(repo, run):
-            view = step_view(job)
+        for view in mark_skipped_jobs([step_view(job) for job in jobs_of(repo, run)]):
             view["workflow"] = path
             if view["failed"]:
                 view["signature"] = signatures(run["id"], run.get("run_attempt", 1))
@@ -253,7 +271,8 @@ def inspect_ci(repo, pr, workflows):
                 break
         else:
             ci["state"] = "pass" if all(s == "pass" for s in states) else "/".join(sorted(set(states)))
-    ci["not_triggered"] = sorted(path for path in workflows if path not in latest)
+    ran_paths = {path for path, _ in latest}
+    ci["not_triggered"] = sorted(path for path in workflows if path not in ran_paths)
     return ci
 
 
@@ -302,13 +321,27 @@ def action_coverage(repo, pr):
     return coverage
 
 
+def step_matcher(name):
+    """A step name as the run shows it: `${{ matrix.x }}` in the workflow is a value in the run."""
+    parts = re.split(r"\$\{\{.*?\}\}", name)
+    if len(parts) == 1:
+        return lambda shown: shown == name
+    pattern = re.compile("^" + ".+".join(re.escape(part) for part in parts) + "$")
+    return lambda shown: bool(pattern.match(shown))
+
+
 def step_state(ci, path, name):
+    """The step counts as run only when the run shows it running. A step in a job skipped as a
+    whole, or under a name this cannot match, is not proved by CI."""
     jobs = [j for j in ci["jobs"] if j.get("workflow") == path]
     if not jobs:
         return "workflow did not run"
-    if any(name in j["conditional"] + j["unreached"] for j in jobs):
+    matches = step_matcher(name)
+    if any(matches(step) for j in jobs for step in j["ran"] + j["failed"]):
+        return "ran"
+    if any(matches(step) for j in jobs for step in j["conditional"] + j["unreached"]):
         return "skipped"
-    return "ran"
+    return "not seen in the run (its job was skipped, or the run names the step differently)"
 
 
 # ---- the batch --------------------------------------------------------------------------------------
@@ -336,6 +369,7 @@ def load_pr(repo, number, workflows):
     majors = [u for u in pr["updates"] if u["tool"] and u["kind"] == "major"]
     pr["test_env_major"] = any(TEST_ENV.match(u["name"]) for u in majors)
     pr["tool_major"] = any(not TEST_ENV.match(u["name"]) for u in majors)
+    pr["build_major"] = any(BUILD.match(u["name"]) for u in pr["updates"] if u["kind"] == "major")
     pr["reviewers"] = sorted({(r.get("author") or {}).get("login", "?") for r in pr.get("reviews", [])})
     pr["ci"] = inspect_ci(repo, pr, workflows)
     pr["coverage"] = action_coverage(repo, pr)
@@ -382,6 +416,10 @@ def print_report(repo, prs):
                 print(f"- #{pr['number']} failed: {view['job']} / {', '.join(view['failed'])}{unreached}")
                 for line in view.get("signature", []):
                     print(f"    {line}")
+        blocked = [v["job"] for v in ci["jobs"] if v.get("skipped_job") == "unreached"]
+        if blocked:
+            quiet = False
+            print(f"- #{pr['number']} jobs never reached after the failure: {', '.join(blocked)}")
         for view in ci["older_failures"]:
             quiet = False
             unreached = f" -> never reached: {', '.join(view['unreached'])}" if view["unreached"] else ""
@@ -397,12 +435,15 @@ def print_report(repo, prs):
 
     print("\n## Not proved by CI")
     conditional = set()
+    conditional_jobs = set()
     not_triggered = {}
     updated_steps = set()
     found = False
     for pr in prs:
         for view in pr["ci"]["jobs"]:
             conditional.update(view["conditional"])
+            if view.get("skipped_job") == "conditional":
+                conditional_jobs.add(f"{view['job']} ({view['workflow']})")
         for path in pr["ci"]["not_triggered"]:
             not_triggered.setdefault(path, []).append(pr["number"])
         for item in pr["coverage"]:
@@ -415,9 +456,13 @@ def print_report(repo, prs):
         print(f"- workflow with no run on the head: {path} ({' '.join(f'#{n}' for n in sorted(numbers))})")
     if not found:
         print("- nothing found")
+    # Only an action bump can be matched to the steps that use it. An npm or Composer update can
+    # still reach these steps through a script, so they are listed, not cleared.
     unrelated = sorted(conditional - updated_steps)
     if unrelated:
-        print(f"- for information, conditional steps no update here touches: {', '.join(unrelated)}")
+        print(f"- for information, conditional steps that use none of the bumped actions: {', '.join(unrelated)}")
+    if conditional_jobs:
+        print(f"- for information, jobs a condition skipped as a whole: {', '.join(sorted(conditional_jobs))}")
 
     tools = [f"#{p['number']}" for p in prs if p["tool_major"]]
     runtime = [f"#{p['number']}" for p in prs if p["scope"] == "runtime" and p["kind"] in ("major", "unknown")]
@@ -427,6 +472,8 @@ def print_report(repo, prs):
     print(f"- tool majors, check the effective rules: {' '.join(tools) or 'none'}")
     print(f"- test environment majors, check the suites they run: {' '.join(test_env) or 'none'}")
     print(f"- runtime majors, check what ships: {' '.join(runtime) or 'none'}")
+    build = [f"#{p['number']}" for p in prs if p["build_major"]]
+    print(f"- build tool majors, check what ships too: {' '.join(build) or 'none'}")
     print(f"- PRs Dependabot will not rebase: {' '.join(edited) or 'none'}")
     reviewed = [f"#{p['number']} ({', '.join(p['reviewers'])})" for p in prs if p["reviewers"]]
     if reviewed:

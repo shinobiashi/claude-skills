@@ -183,6 +183,46 @@ h7 = pr(7, "test: stop the live region from failing queries", b7,
         reviews=("copilot-pull-request-reviewer",))
 runs(b7, run(71, b7, h7, conclusion=None, status="in_progress"))
 jobs(71, ("JS", None, steps(("ESLint", None))))
+
+# #8: an action that a tag-only job uses (the job is skipped as a whole, with no steps), and a
+# matrix step whose name the run shows with the value filled in.
+b8 = "dependabot/github_actions/softprops/action-gh-release-3"
+h8 = pr(8, "ci: bump softprops/action-gh-release from 2 to 3", b8,
+        [bot(meta(("softprops/action-gh-release", "'3'", "production", "major")))], files=(".github/workflows/ci.yml",))
+runs(b8, run(81, b8, h8))
+jobs(81, ("php (8.3)", "success", steps(("Notes on 8.3", "success"))),
+     ("release", "skipped", []))
+put(f"api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/ci.yml?ref={h8}", """name: CI
+jobs:
+  php:
+    strategy:
+      matrix:
+        php: ['8.3']
+    steps:
+      - name: Notes on ${{ matrix.php }}
+        uses: softprops/action-gh-release@v3
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Publish the release
+        uses: softprops/action-gh-release@v3
+""")
+
+# #9: jobs that `needs:` a failed job never start, so they have no steps at all.
+b9 = "dependabot/npm_and_yarn/lodash-5.0.0"
+h9 = pr(9, "chore(deps): bump lodash from 4.17.21 to 5.0.0", b9, [bot(meta(("lodash", "5.0.0", "production", "major")))])
+runs(b9, run(91, b9, h9, conclusion="failure"))
+jobs(91, ("lint", "failure", steps(("ESLint", "failure"))), ("test", "skipped", []), ("build", "skipped", []))
+put("run view 91 --attempt 1 --log-failed", "")
+
+# #10: `on: [push, pull_request]` runs the workflow twice on one head; the red one counts.
+b10 = "dependabot/npm_and_yarn/foo-2.0.0"
+h10 = pr(10, "chore(deps-dev): bump foo from 1.0.0 to 2.0.0", b10, [bot(meta(("foo", "2.0.0", "development", "major")))])
+runs(b10, dict(run(101, b10, h10, conclusion="failure"), event="push"),
+     dict(run(102, b10, h10, created="2026-11-05T00:01:00Z"), event="pull_request"))
+jobs(101, ("JS", "failure", steps(("ESLint", "failure"), ("Build", "skipped"))))
+jobs(102, ("JS", "success", GREEN_JS))
+put("run view 101 --attempt 1 --log-failed", "")
 PY
 
 echo "inventory.py"
@@ -220,7 +260,7 @@ echo "== the same failure elsewhere"
 has "a shared failure is pointed out" "#2 #3: ● PoList › shows an error notice"
 
 echo "== what CI did not prove"
-has "a conditional step no update touches is only for information" "for information, conditional steps no update here touches: Notify on failure"
+has "a conditional step no bumped action uses is only for information" "for information, conditional steps that use none of the bumped actions: Notify on failure"
 hasnt "setup steps are not reported" "Set up job"
 if printf '%s\n' "$OUT" | grep -F 'for information' | grep -qF 'Upload Playwright report'; then
     bad "a step an update touches is not repeated as information"
@@ -238,8 +278,23 @@ has "a test environment major is not sent to the rule diff" "test environment ma
 has "and reads so in the table" "major (test env)"
 has "reviews are pointed out" "reviews to read: #7 (copilot-pull-request-reviewer)"
 has "runtime majors" "runtime majors, check what ships: #2 #4"
+has "a build tool major is sent to the shipped files too" "build tool majors, check what ships too: #3"
 has "PRs that Dependabot leaves alone" "PRs Dependabot will not rebase: #4 #7"
 has "an old PR that Dependabot stopped rebasing" "older than 30 days, no automatic rebase (ask with \`@dependabot rebase\`): #5"
+
+echo "== what a skipped job hides"
+run 8 9 10
+status "reads the second batch" 0
+if [ -f "$FX/.misses" ]; then echo "  (unexpected gh calls)"; sed 's/^/    /' "$FX/.misses"; fi
+has "an action in a job skipped as a whole is not proved" \
+    '#8 softprops/action-gh-release: step "Publish the release" in .github/workflows/ci.yml: not seen in the run'
+# shellcheck disable=SC2016  # the literal ${{ }} of a workflow file
+hasnt "a matrix step matches the name the run shows" 'step "Notes on ${{ matrix.php }}"'
+has "a job a condition skipped is listed" "jobs a condition skipped as a whole: release (.github/workflows/ci.yml)"
+has "jobs a failure kept from starting are never reached" "#9 jobs never reached after the failure: test, build"
+hasnt "and are not read as skipped by a condition" "test (.github/workflows/ci.yml)"
+has "a red push run is not hidden by a green pull_request run" "| #10 | npm | dev | foo 1.0.0 -> 2.0.0 | major | fail |"
+has "and its failure shows" "#10 failed: JS / ESLint -> never reached: Build"
 
 echo "== default selection"
 run

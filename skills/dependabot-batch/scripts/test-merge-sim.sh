@@ -170,6 +170,18 @@ case "$REC" in
     *) bad "a stack sorts by depth, not by number"; printf '%s\n' "$REC" ;;
 esac
 
+# A PR that conflicts with the base itself is no pair's fault, whichever place it is given in.
+run --plan --base bot-a --no-fetch b=bot-b c=bot-c
+has "a PR that conflicts with the base is listed apart" "conflicting with the base by itself (left out of the pairs):"
+has "with its files" "  b  package.json"
+PAIRS="$(printf '%s\n' "$OUT" | sed -n '/^conflicting pairs/,/^$/p')"
+case "$PAIRS" in
+    *"  none"*) ok "and no pair is blamed for it" ;;
+    *) bad "and no pair is blamed for it" ;;
+esac
+run --plan --base bot-a --no-fetch c=bot-c b=bot-b
+hasnt "nor when it comes last" "c x b"
+
 run --plan --base main --no-fetch 1=bot-a 3=bot-c
 has "no conflicts reads as none" "  none"
 status "no conflicts exits 0" 0
@@ -234,6 +246,19 @@ run --base main --no-fetch nope
 status "a spec that is neither a number nor LABEL=REV is an error" 2
 run --base main --no-fetch a=no-such-rev
 status "an unknown revision is an error" 2
+run --base main --no-fetch "my fix=bot-a"
+status "a label with a space is an error, not a shifted field" 2
+has "says what a label can be" "a label is letters, digits"
+run --base main --no-fetch "=bot-a"
+status "an empty label is an error" 2
+
+# git refuses unrelated histories (exit 128): that is an error, never a conflicting pair.
+git checkout --quiet --orphan unrelated
+human commit --quiet --allow-empty -m unrelated
+git checkout --quiet main
+run --plan --base main --no-fetch a=bot-a u=unrelated
+status "a git error in the plan exits 2" 2
+hasnt "and is not read as a conflict" "a x u"
 run --help
 status "--help exits 0" 0
 has "--help shows the usage" "merge-sim.sh --plan"

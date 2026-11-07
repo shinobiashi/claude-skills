@@ -24,7 +24,8 @@ Run it with the Node that CI uses (nvm use): the tools refuse or change behaviou
 
 A probe that fails on one side is a finding, never "no difference": a tool that cannot print its
 configuration may be a tool that cannot run. The same goes for a tool with a config in the tree
-but no binary: that is a skipped install. SKIPPED only means the project does not use the tool.
+but no binary (a skipped install), and for a tool package.json runs with no config this can find.
+SKIPPED only means the project shows no sign of using the tool.
 PHPCS and the test runners are compared by what they list, so a sniff removed upstream shows up
 too: LOST means "look at this", not "this is broken". Jest lists files, not tests, and the counts
 compare the two trees; they are not the totals CI prints.
@@ -51,6 +52,16 @@ LEGACY_ESLINT = (".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json",
 WP_CONFIG = "node_modules/@wordpress/scripts/config"
 ALL_TOOLS = ("eslint", "stylelint", "tsc", "jest", "playwright", "phpcs", "phpstan", "phpunit", "assets")
 PLAYWRIGHT_CONFIGS = ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs", "playwright.config.cjs")
+JEST_CONFIGS = ("jest-unit.config.js", "jest-unit.config.cjs", "jest-unit.config.mjs", "jest.config.js",
+                "jest.config.cjs", "jest.config.mjs", "jest.config.ts", "jest.config.json")
+# TypeScript checks that `strict` turns on unless they are set; turning any of them off weakens tsc.
+STRICT_FAMILY = ("noImplicitAny", "noImplicitThis", "alwaysStrict", "strictNullChecks", "strictFunctionTypes",
+                 "strictBindCallApply", "strictPropertyInitialization", "useUnknownInCatchVariables",
+                 "strictBuiltinIteratorReturn")
+TSC_CHECKS = ("strict",) + STRICT_FAMILY + (
+    "noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch",
+    "noUncheckedIndexedAccess", "exactOptionalPropertyTypes", "noImplicitOverride",
+    "noPropertyAccessFromIndexSignature", "checkJs")
 SEVERITY = {0: "off", 1: "warn", 2: "error", "0": "off", "1": "warn", "2": "error"}
 LIMIT = 40
 
@@ -92,12 +103,17 @@ def tracked(tree):
     return found
 
 
-def scripts_use(tree, *words):
+def package_json(tree):
     try:
         with open(os.path.join(tree, "package.json"), encoding="utf-8") as handle:
-            scripts = json.load(handle).get("scripts", {})
+            data = json.load(handle)
     except (OSError, ValueError):
-        return False
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def scripts_use(tree, *words):
+    scripts = package_json(tree).get("scripts", {})
     return any(word in str(value) for value in scripts.values() for word in words)
 
 
@@ -142,19 +158,25 @@ def normalize_rule(value):
     return severity, json.dumps(items[1:], sort_keys=True)
 
 
-def normalize_stylelint_rule(value):
-    """Stylelint: null is off, and the severity sits in the secondary options, default error."""
+def normalize_stylelint_rule(value, default="error"):
+    """Stylelint: null is off, and the severity sits in the secondary options. A rule that names
+    none takes the config's defaultSeverity, so a shared config can turn every rule into a warning."""
     items = value if isinstance(value, list) else [value]
     if not items or items[0] is None:
         return "off", "[]"
     secondary = items[1] if len(items) > 1 and isinstance(items[1], dict) else {}
-    severity = "warn" if secondary.get("severity") == "warning" else "error"
+    severity = {"warning": "warn", "error": "error"}.get(secondary.get("severity"), default)
     return severity, json.dumps(items, sort_keys=True)
 
 
-def compare_rules(base_rules, head_rules, normalize=normalize_rule):
+def stylelint_normalizer(config):
+    default = "warn" if config.get("defaultSeverity") == "warning" else "error"
+    return lambda value: normalize_stylelint_rule(value, default)
+
+
+def compare_rules(base_rules, head_rules, normalize=normalize_rule, normalize_head=None):
     base = {name: normalize(value) for name, value in base_rules.items()}
-    head = {name: normalize(value) for name, value in head_rules.items()}
+    head = {name: (normalize_head or normalize)(value) for name, value in head_rules.items()}
     active = lambda rule: rule is not None and rule[0] != "off"
     diff = {"lost": [], "dropped": [], "gained": [], "weakened": [], "options": []}
     for name in sorted(set(base) | set(head)):
@@ -211,7 +233,7 @@ def rules_status(diff):
 
 
 def read_config(tree, sample, binary, bundled, command):
-    """(rules or None, source, error). wp-scripts passes its own config when it finds none."""
+    """(config or None, source, error). wp-scripts passes its own config when it finds none."""
     exe = tool_path(tree, binary)
     if exe is None:
         return None, None, "not installed"
@@ -231,12 +253,19 @@ def read_config(tree, sample, binary, bundled, command):
     if text in ("", "undefined"):
         return {}, f"{source}, file ignored", None
     try:
-        return json.loads(text).get("rules", {}), source, None
+        config = json.loads(text)
     except ValueError:
         return None, None, "the output is not JSON"
+    return (config if isinstance(config, dict) else {}), source, None
 
 
-def probe_config(tool, base, head, samples, binary, bundled, command, full, normalize=normalize_rule):
+def source_kind(source):
+    """Only a switch between the project's config and a bundled one, or a file that became
+    ignored, changes what is checked. Two bundled files with other names are the same kind."""
+    return source.startswith("wp-scripts' bundled"), source.endswith("file ignored")
+
+
+def probe_config(tool, base, head, samples, binary, bundled, command, full, normalizer=None):
     results = []
     for sample in samples:
         old, old_source, old_err = read_config(base, sample, binary, bundled, command)
@@ -249,10 +278,13 @@ def probe_config(tool, base, head, samples, binary, bundled, command, full, norm
             lines = [f"{side}: {err}" for side, err in (("base", old_err), ("head", new_err)) if err]
             results.append(result(sample, "failed", lines))
             continue
-        diff = compare_rules(old, new, normalize)
+        normalize = normalizer or (lambda config: normalize_rule)
+        diff = compare_rules(old.get("rules", {}), new.get("rules", {}), normalize(old), normalize(new))
         lines = rules_lines(diff, full)
         status = rules_status(diff)
-        if old_source != new_source:
+        if old_source != new_source and source_kind(old_source) == source_kind(new_source):
+            lines.insert(0, f"config: base uses {old_source}, head uses {new_source}")
+        elif old_source != new_source:
             lines.insert(0, f"CONFIG SOURCE: base uses {old_source}, head uses {new_source}")
             status = "lost"
             ignored = [n for n in LEGACY_ESLINT if tool_path(head, n)] if tool == "eslint" else []
@@ -273,7 +305,7 @@ def probe_stylelint(base, head, explicit, full):
     samples = pick_samples(base, head, explicit, ((".scss", False), (".css", False)))
     bundled = ((".stylelintrc.json", ()),)
     binary = "node_modules/.bin/stylelint"
-    return probe_config("stylelint", base, head, samples, binary, bundled, "lint-style", full, normalize_stylelint_rule)
+    return probe_config("stylelint", base, head, samples, binary, bundled, "lint-style", full, stylelint_normalizer)
 
 
 def tsc_config(tree):
@@ -299,11 +331,21 @@ def probe_tsc(base, head, full):
     old_opts, new_opts = old.get("compilerOptions", {}), new.get("compilerOptions", {})
     changed = sorted(k for k in set(old_opts) | set(new_opts) if old_opts.get(k) != new_opts.get(k))
     lines = [f"{k}: {old_opts.get(k)} -> {new_opts.get(k)}" for k in changed]
+    weakened = [k for k in TSC_CHECKS if k in tsc_checks_on(old_opts) - tsc_checks_on(new_opts)]
+    if weakened:
+        lines.insert(0, names("WEAKENED checks no longer on", weakened, full))
     old_files, new_files = len(old.get("files", [])), len(new.get("files", []))
     if old_files != new_files:
         lines.append(f"files: {old_files} -> {new_files}")
-    status = "lost" if new_files < old_files else ("changed" if lines else "same")
-    return [result("tsconfig", status, lines, {"changed": changed})]
+    status = "lost" if new_files < old_files or weakened else ("changed" if lines else "same")
+    return [result("tsconfig", status, lines, {"changed": changed, "weakened": weakened})]
+
+
+def tsc_checks_on(options):
+    """The checks in effect: set to true, or left unset under strict when strict covers them."""
+    strict = options.get("strict") is True
+    return {k for k in TSC_CHECKS
+            if options.get(k) is True or (options.get(k) is None and strict and k in STRICT_FAMILY)}
 
 
 def relative_lines(out, tree):
@@ -332,30 +374,62 @@ def probe_list(subject, base, head, command_for, keep, full, label="tests listed
     return [result(subject, "lost" if diff["lost"] else ("changed" if diff["gained"] else "same"), lines, diff)]
 
 
+def bundled_jest_config(tree):
+    """wp-scripts test-unit-js passes its bundled config as JSON when the project has none, so the
+    rootDir is the tree, not node_modules. Do the same."""
+    path = tool_path(tree, f"{WP_CONFIG}/jest-unit.config.js")
+    if not path:
+        return None, f"{WP_CONFIG}/jest-unit.config.js is missing: install the dependencies"
+    code, out, err = run(["node", "-e", "process.stdout.write(JSON.stringify(require(process.argv[1])))", path], tree)
+    return (out, None) if code == 0 and out.startswith("{") else (None, first_error(err, out))
+
+
 def probe_jest(base, head, config, full):
-    if not config:
-        for name in ("jest-unit.config.js", "jest-unit.config.cjs", "jest.config.js", "jest.config.cjs", "jest.config.ts", "jest.config.json"):
-            if tool_path(base, name):
-                config = name
-                break
-    if not config:
-        return [result("jest", "skipped", ["no Jest config (pass --jest-config)"])]
-    command = lambda tree: [os.path.join(tree, "node_modules/.bin/jest"), "--listTests", "--config", config]
+    config = config or next((name for name in JEST_CONFIGS if tool_path(base, name)), None)
+    if config:
+        label, args = config, {base: ["--config", config], head: ["--config", config]}
+    elif "jest" in package_json(base):
+        label, args = "package.json", {base: [], head: []}  # Jest reads the key by itself
+    elif wp_scripts_runs(base, "test-unit-js"):
+        label, args = "wp-scripts' bundled jest-unit.config.js", {}
+        errors = []
+        for side, tree in (("base", base), ("head", head)):
+            json_config, error = bundled_jest_config(tree)
+            if error:
+                errors.append(f"{side}: {error}")
+            args[tree] = ["--config", json_config]
+        if errors:
+            return [result(f"jest ({label})", "failed", errors)]
+    elif scripts_use(base, "jest"):
+        return [result("jest", "failed", ["package.json runs Jest, but no config was found: pass --jest-config"])]
+    else:
+        return [result("jest", "skipped", ["no Jest config, and package.json does not run Jest"])]
+    command = lambda tree: [os.path.join(tree, "node_modules/.bin/jest"), "--listTests", *args[tree]]
     keep = lambda line: not line.startswith(("Error", "at "))
-    return probe_list(f"jest ({config})", base, head, command, keep, full, label="test files listed")
+    return probe_list(f"jest ({label})", base, head, command, keep, full, label="test files listed")
 
 
 def probe_playwright(base, head, full):
-    if not any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
-        return [result("playwright", "skipped", ["no Playwright config"])]
     binary = "node_modules/.bin/playwright"
-    missing = missing_tool("playwright", base, head, binary, PLAYWRIGHT_CONFIGS)
-    if missing:
-        return missing
-    command = lambda tree: [os.path.join(tree, binary), "test", "--list"]
+    bundled = f"{WP_CONFIG}/playwright.config.js"
+    if any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
+        subject, args = "playwright", []
+    elif wp_scripts_runs(base, "test-playwright"):
+        # What wp-scripts test-playwright runs when the project has no config of its own.
+        subject, args = "playwright (wp-scripts' bundled playwright.config.js)", ["--config", bundled]
+        missing = [side for side, tree in (("base", base), ("head", head)) if not tool_path(tree, bundled)]
+        if missing:
+            return [result(subject, "failed", [f"{side}: {bundled} is missing: install the dependencies" for side in missing])]
+    elif scripts_use(base, "playwright"):
+        return [result("playwright", "failed", ["package.json runs Playwright, but no config was found"])]
+    else:
+        return [result("playwright", "skipped", ["no Playwright config, and package.json does not run it"])]
+    if not (tool_path(base, binary) and tool_path(head, binary)):
+        return [result(subject, "failed", [f"{binary} is missing in a tree: install the dependencies, or leave the tool out with --only"])]
+    command = lambda tree: [os.path.join(tree, binary), "test", "--list", *args]
     # An edit above a test moves its line number; that is the same test.
     clean = lambda line: re.sub(r":\d+:\d+", "", line)
-    return probe_list("playwright", base, head, command, lambda line: "\u203a" in line, full, clean=clean)
+    return probe_list(subject, base, head, command, lambda line: "\u203a" in line, full, clean=clean)
 
 
 def probe_phpunit(base, head, config, full):
@@ -455,8 +529,16 @@ def asset_entries(tree, build_dir):
 
 def probe_assets(base, head, build_dir, full):
     old, new = asset_entries(base, build_dir), asset_entries(head, build_dir)
-    if not old or not new:
-        return [result("assets", "skipped", ["no *.asset.php in both trees (run the build in both, or pass --build-dir)"])]
+    if old and not new or new and not old:
+        # Either the build did not run in one tree, or the build stopped writing them.
+        side = "base" if old else "head"
+        return [result("assets", "failed", [f"only the {side} has *.asset.php: run the build in both trees, "
+                                            "or the build no longer writes them"])]
+    if not old and not new:
+        if scripts_use(base, "wp-scripts build", "webpack"):
+            return [result("assets", "failed", ["package.json builds with wp-scripts or webpack, but there is no "
+                                                "*.asset.php: run the build in both trees, or pass --build-dir"])]
+        return [result("assets", "skipped", ["no *.asset.php, and package.json does not build with wp-scripts or webpack"])]
     lines = []
     for entry in sorted(set(old) | set(new)):
         if entry not in old or entry not in new:

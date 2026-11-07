@@ -77,7 +77,7 @@ git show origin/main:.github/dependabot.yml      # コメントに除外の理�
 | 「Not proved by CI」に PR 番号付きで出た更新 | §3 |
 | `major (tool)` | §4。**CI が緑でも省かない** |
 | `major (test env)` | §4 の「テスト環境の更新」 |
-| 実行時の依存（`runtime`）の major | §5 |
+| 実行時の依存（`runtime`）の major、「build tool majors」に出た PR | §5 |
 | dev の patch / minor で緑 | 変更内容の確認だけ |
 
 major は Breaking Changes を、今の版から新しい版まで**間の major も全部**読み、リポジトリの使い方に当たるかを確かめる。PR 本文の changelog は `(truncated)` で途中で切れる（#59 では 7.0 の API 削除が本文に無かった）。`@wordpress/*` の全文は次で読める。
@@ -112,7 +112,7 @@ Playwright の `retries` は Actions の再実行とは別なので、`inventory
    bash "$D/run-steps.sh" --dir "$S/pr52" --repeat 5 --load -- 'npm run test:unit'
    ```
 
-   `FLAKY` が両方に出るなら更新は無関係、PR だけ毎回 `FAIL` なら更新が原因。
+   `FLAKY` が両方に出るなら更新は無関係、PR だけ毎回 `FAIL` なら更新が原因。繰り返しは数分かかるので、Bash の `run_in_background` で流す（Bash の既定のタイムアウトは 2 分で、打ち切られると結果が出ない）。
 4. **不安定と判定したら、原因を決定的に再現する**: タイミングに頼らず必ず落ちる形を作る（#55 では effect の完了後に探すと毎回 2 要素見つかった）。直った証拠は「落ちる形が通るようになった」こと。再実行で緑になることは証拠にならない。
 
 不安定テストの修正は、バッチの最初に入れる価値がある。Dependabot のリベースのたびに CI が走るので、12 本のうち 2 本が落ちる確率のままだと、マージのたびに再実行が要る。修正が大きいなら、backlog に記録して再実行で進めるかをユーザーに確認する。
@@ -123,11 +123,13 @@ Playwright の `retries` は Actions の再実行とは別なので、`inventory
 
 | 種類 | 実例 | 対応 |
 |---|---|---|
-| 失敗で止まって届かなかった | #54 は ESLint で止まり、Stylelint・TypeScript・Jest・Build に届かなかった | ローカルで全部流す |
+| 失敗で止まって届かなかった（`needs:` で始まらなかったジョブを含む） | #54 は ESLint で止まり、Stylelint・TypeScript・Jest・Build に届かなかった | ローカルで全部流す |
 | 条件で飛ばされた（`if: failure()` など） | #47 の `upload-artifact` は E2E が失敗したときしか動かない | リリースノートで、使っている入力への影響を確かめる |
 | PR で起動しない（タグ・リリース・`paths` の絞り込み） | リリース用ワークフローの Action の更新 | 同上。次のリリースが初回の実行になることを報告する |
 
-後の 2 つは緑の PR にも当てはまる。`inventory.py` の「Not proved by CI」に PR 番号付きで出たものが該当する。「for information」の行は、このバッチの更新に関係しないステップなので確認しなくてよい。
+後の 2 つは緑の PR にも当てはまる。`inventory.py` の「Not proved by CI」に PR 番号付きで出たものが該当する。
+
+「for information」の行には、更新した Action を使わない条件付きのステップと、条件でジョブごと飛ばされたジョブが出る。Action の更新については確認しなくてよい。npm・Composer の更新は、こうしたステップからスクリプト経由で動くことがある（`npm run plugin-zip` など）。そのステップが更新したパッケージを使うかを確かめる。
 
 全ステップが緑の PR は、ここでは流し直さなくてよい。CI が同じことをもう確かめている。
 
@@ -180,11 +182,13 @@ ESLint・Stylelint は実際に効いている設定、PHPCS は sniff の一覧
 | `CONFIG SOURCE` / `NOT READ` | プロジェクトの設定が読まれていない | **最優先で直す**。ルールの増減はこの後で見直す |
 | `OPTIONS DROPPED` | プロジェクトが設定したオプションが消えた | 直す（text domain の指定はここに出る） |
 | `LOST` | 効いていたルールが消えた | 上流の意図的な削除なら記録して通す。リリースノートや変更履歴で確かめる |
-| `WEAKENED` | error が warn になった | CI は warn で落ちないので、意図した変更かを確かめる |
-| `FAILED` | ツールが設定を出せない、または入っていない | **差分なしと読まない**。ツールが動かない場合と、準備のステップが足りない場合がある |
+| `WEAKENED` | error が warn になった（Stylelint の `defaultSeverity` を含む）。TypeScript では strict 系のチェックが外れた | CI は warn で落ちないので、意図した変更かを確かめる |
+| `FAILED` | ツールが設定を出せない、入っていない、または package.json が使っているのに設定が見つからない | **差分なしと読まない**。ツールが動かない場合と、準備のステップ（依存の導入・ビルド）が足りない場合がある |
 | `CHANGED` | オプションの変化やルールの追加だけ | 内容を見る。止める必要はない |
 | `SAME` | 比べた範囲は同じ | 下の「`SAME` の読み方」を見る |
-| `SKIPPED` | プロジェクトがそのツールを使っていない | 対応なし |
+| `SKIPPED` | 設定が無く、package.json の scripts にも使っている形跡が無い | 対応なし |
+
+同梱の設定どうしでファイル名だけが変わったとき（`.eslintrc.js` → `eslint.config.cjs`）は、`CONFIG SOURCE` ではなく `config:` の行に出る。プロジェクトの設定はもともと無いので、直すものは無い。
 
 `LOST` が出ても、それだけで壊れているとは限らない。逆に `SAME` も実際に動く保証にはならない。**lint・解析ツール本体の major では、全部 `SAME` でも誤りを 1 つ入れて検出を確かめる**。`CONFIG SOURCE`・`OPTIONS DROPPED` が出たものは、直した後に必ず確かめる。手順は `references/detection-checks.md` を読む。
 
@@ -197,9 +201,11 @@ ESLint・Stylelint は実際に効いている設定、PHPCS は sniff の一覧
 - Breaking Changes で削除された API を使っていないか（`git grep`）
 - E2E が型チェックの対象なら、`tests/e2e` に型の誤りを入れて検出されるか
 
-### 5. 実行時の依存の major
+### 5. 実行時の依存とビルドツールの major
 
-ユーザーの手元に届くものが変わるかを確かめる。ビルドを両方の worktree で実行してから、まず出力を丸ごと比べる。
+ユーザーの手元に届くものが変わるかを確かめる。ビルドツール（`@wordpress/scripts`・webpack・Babel・`@wordpress/dependency-extraction-webpack-plugin`）は dev の依存でも、出荷するバンドルと `*.asset.php` を書く。たとえば JSX の変換方式が変わると、`*.asset.php` に新しいスクリプトの依存が加わり、そのスクリプトを持たない古い WordPress では動かなくなる。§4 の比較は lint とテストの設定しか見ないので、ここで確かめる。
+
+ビルドを両方の worktree で実行してから、まず出力を丸ごと比べる。
 
 ```bash
 diff -rq "$S/base/assets/build" "$S/pr59/assets/build"    # ビルドの出力先はリポジトリに合わせる
@@ -234,7 +240,7 @@ diff -rq "$S/base/assets/build" "$S/pr59/assets/build"    # ビルドの出力�
 bash "$D/merge-sim.sh" --plan 43 44 45 46 47 48 49 50 51 52 53 54 55
 ```
 
-ワーキングツリーも ref も変えずに、衝突する組、推奨順、番号順を表示する（推奨順と番号順が同じなら 1 つにまとめる）。
+ワーキングツリーもブランチも変えずに（既定では base だけ fetch する）、base と単独で衝突する PR、衝突する組、推奨順、番号順を表示する（推奨順と番号順が同じなら 1 つにまとめる）。base と単独で衝突する PR は組の判定から外して別に出す。Dependabot の PR ならリベースを待ち、人のコミットが入った PR なら main の取り込みが要る（`references/lockfile-conflicts.md`）。
 
 順番の考え方:
 

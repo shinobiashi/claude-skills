@@ -12,8 +12,9 @@
 #   --no-fetch        do not fetch the base
 #   -h, --help        this text
 #
-# Every merge is `git merge-tree` plus `git commit-tree`, so no branch, ref, index or working
-# tree changes; the commits made are dangling objects that git gc drops by itself.
+# Every merge is `git merge-tree` plus `git commit-tree`, so no branch, index or working tree
+# changes; the commits made are dangling objects that git gc drops by itself. Fetching the
+# default base moves origin's remote-tracking branch, as any fetch does (--no-fetch skips it).
 # Each order ends with its tip. `git worktree add --detach DIR <tip>` makes that state real, so
 # the CI steps can run on it.
 #
@@ -78,8 +79,12 @@ N=${#SPECS[@]}
 i=0
 for spec in "${SPECS[@]}"; do
     case "$spec" in
-        *=*) label="${spec%%=*}"; sha="$(git rev-parse --verify --quiet "${spec#*=}^{commit}")" \
-                 || die "no such revision: ${spec#*=}" ;;
+        *=*) label="${spec%%=*}"
+             # The label is a field in W/<index>, so a space or an empty label would shift the rest.
+             case "$label" in
+                 '' | *[!A-Za-z0-9._/#-]*) die "a label is letters, digits and . _ / # - only: $spec" ;;
+             esac
+             sha="$(git rev-parse --verify --quiet "${spec#*=}^{commit}")" || die "no such revision: ${spec#*=}" ;;
         *[!0-9]*) die "not a PR number or LABEL=REV: $spec" ;;
         *) label="#$spec"
            git fetch --quiet origin "refs/pull/$spec/head" 2>/dev/null || die "cannot fetch PR $spec"
@@ -105,6 +110,10 @@ step() {
     rc=$?
     STEP_TREE="$(printf '%s\n' "$out" | sed -n 1p)"
     STEP_FILES="$(printf '%s\n' "$out" | sed -n '2,$p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    # merge-tree exits 1 for "not something we can merge" too; only a conflict prints a tree.
+    if [ "$rc" -le 1 ] && ! [[ "$STEP_TREE" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+        rc=2
+    fi
     case "$rc" in
         0) return 0 ;;
         1) return 1 ;;
@@ -120,25 +129,41 @@ commit() { # commit TREE TIP SHA
     fi
 }
 
-# Conflicts between two PRs, each pair merged on the base in both directions when it matters:
-# one direction is enough, as a three-way conflict does not depend on which side comes first.
+# Conflicts between two PRs: one merged on the base, then the other. One direction is enough, as
+# a three-way conflict does not depend on which side comes first. A PR that conflicts with the
+# base by itself is listed apart and left out of the pairs: every pair with it would conflict.
 pairs() {
-    local a b tip found=0
+    local a b rc tip found=0 alone=" "
+    a=0
+    while [ "$a" -lt "$N" ]; do
+        step "$BASE_SHA" "$(field "$a" 2)"
+        rc=$?
+        [ "$rc" -le 1 ] || exit 2
+        if [ "$rc" -eq 1 ]; then
+            [ "$alone" != " " ] || echo "conflicting with the base by itself (left out of the pairs):"
+            printf '  %s  %s\n' "$(field "$a" 1)" "$STEP_FILES"
+            alone="$alone$a "
+        fi
+        a=$((a + 1))
+    done
     echo "conflicting pairs (one merged on the base, then the other):"
     a=0
     while [ "$a" -lt "$N" ]; do
-        if step "$BASE_SHA" "$(field "$a" 2)"; then
-            tip="$(commit "$STEP_TREE" "$BASE_SHA" "$(field "$a" 2)")"
-            b=$((a + 1))
-            while [ "$b" -lt "$N" ]; do
-                if ! step "$tip" "$(field "$b" 2)"; then
-                    [ $? -eq 2 ] && exit 2
-                    printf '  %s x %s  %s\n' "$(field "$a" 1)" "$(field "$b" 1)" "$STEP_FILES"
-                    found=1
-                fi
-                b=$((b + 1))
-            done
-        fi
+        case "$alone" in *" $a "*) a=$((a + 1)); continue ;; esac
+        step "$BASE_SHA" "$(field "$a" 2)" || exit 2
+        tip="$(commit "$STEP_TREE" "$BASE_SHA" "$(field "$a" 2)")"
+        b=$((a + 1))
+        while [ "$b" -lt "$N" ]; do
+            case "$alone" in *" $b "*) b=$((b + 1)); continue ;; esac
+            step "$tip" "$(field "$b" 2)"
+            rc=$?
+            [ "$rc" -le 1 ] || exit 2
+            if [ "$rc" -eq 1 ]; then
+                printf '  %s x %s  %s\n' "$(field "$a" 1)" "$(field "$b" 1)" "$STEP_FILES"
+                found=1
+            fi
+            b=$((b + 1))
+        done
         a=$((a + 1))
     done
     [ "$found" -eq 1 ] || echo "  none"

@@ -42,9 +42,11 @@ npm ci --no-audit --no-fund                   # 作り直した結果が本当�
 
 ```bash
 git checkout --ours -- composer.lock
-composer update <変えたパッケージ> --no-install --no-interaction --no-scripts
+composer update <取り込む側で版が変わったパッケージ...> --no-install --no-interaction --no-scripts
 composer validate --no-check-publish          # lock が composer.json と合っているか
 ```
+
+`--ours` の lock には、こちら側の更新しか入っていない。取り込む側（main の取り込みなら main）で版が変わったパッケージを名前で渡して、lock に足す。`composer update --lock` はハッシュを書き直すだけで版を変えないので、ここでは使わない。
 
 ### 解いた後
 
@@ -60,8 +62,10 @@ composer validate --no-check-publish          # lock が composer.json と合っ
 
    ```bash
    npm install --package-lock-only --no-audit --no-fund
-   composer update --lock --no-install --no-interaction --no-scripts
+   composer update <手順 2 で版を変えたパッケージ...> --no-install --no-interaction --no-scripts
    ```
+
+   `composer update --lock` は使わない。ハッシュを書き直すだけで lock の版は古いまま残り、続く `composer validate` が lock の誤りを報告する。
 
 4. `npm ci`・`composer install` が通ることを確かめ、CI と同じステップを流す
 
