@@ -203,6 +203,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `dev-cycle`: `request-gate-review.sh` の `CI=none`(run も check も現れない)で PR の `mergeable` を見て、`CONFLICTING` なら衝突だと出すようにした。
+  GitHub は base と衝突している PR に `pull_request` の workflow を走らせない。epsilon-for-woocommerce PR #19 では最後の記録用コミットの
+  `CI=none` を `paths-ignore` のせいと読み、衝突に気づかないままマージ可能と報告した(同じ PR の docs だけのコミットには CI が走っていた)。
+  シナリオテストを追加、SKILL.md の Step 6 にも追記(ユーザー指示)。
 - `wporg-screenshots`: wp-env 11.17 で `capture.sh` が `wp-env install path is empty` で止まっていた。wp-env 11 は `install-path` コマンドを
   無くし（使い方を stderr に出して終了コード 0）、インストール先は `wp-env status` の `install path:` の行に出す。`install-path` が絶対パスを
   返さないときは `wp-env status --json` の `installPath` から読むようにした（テキストの行より書式の変化に強い。saai-signal-mail の

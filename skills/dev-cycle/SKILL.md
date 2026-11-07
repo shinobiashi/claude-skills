@@ -311,7 +311,8 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   それで取り逃した)。その sha の run が 1 つも無い repo(Actions 以外の CI)では `gh pr checks` に切り替える。
   失敗・取消の run が 1 つでも出たら残りを待たずに **exit 3**(何も依頼しない)で、失敗したジョブ名と、セットアップで
   死んだとき(ランナー・ネットワーク・イメージビルド)の `gh run rerun <id> --failed` を出す。180 秒たっても run も check も
-  現れない時も exit 3(`CI=none`)。待っている間に PR の head が変わったら `CI=head-moved` の exit 3(新しい head で
+  現れない時も exit 3(`CI=none`)。PR が base と衝突していると GitHub は `pull_request` の workflow を走らせないので、その時は衝突だと出す
+  (`CI=none` を「docs だけのコミットだから」と読まない。epsilon-for-woocommerce PR #19 では最後の記録用コミットの `CI=none` をそう読み、衝突に気づかなかった)。待っている間に PR の head が変わったら `CI=head-moved` の exit 3(新しい head で
   やり直す)。jp4wc-rakusync PR #14 では依頼の前の CI 待ちの until ループを 1 PR で 5 回、saai-signal-mail PR #8 では
   6 回手書きしていた
 - 最後に bot ごとの状態行 `COPILOT=responded|timeout|unregistered|not-waited` /

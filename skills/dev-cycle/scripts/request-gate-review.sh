@@ -350,6 +350,10 @@ wait_for_ci() {
 		if [ "$seen" -eq 0 ] && [ "$waited" -ge "$CI_APPEAR" ]; then
 			ci_status=none
 			echo "request-gate-review: no workflow run and no check appeared on PR #$pr within ${CI_APPEAR}s (last gh pr checks output, exit $rc: $out) — nothing is requested" >&2
+			# GitHub starts no pull_request workflow on a PR that conflicts with its base.
+			if [ "$(gh pr view "$pr" --json mergeable --jq '.mergeable' 2>/dev/null)" = CONFLICTING ]; then
+				echo "request-gate-review: PR #$pr conflicts with its base, and GitHub runs no pull_request workflow until that is resolved: merge the base into the branch and push" >&2
+			fi
 			return 1
 		fi
 		if [ "$waited" -ge "$ci_timeout" ]; then

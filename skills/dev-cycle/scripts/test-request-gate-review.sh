@@ -75,6 +75,7 @@ register() { touch "$S/pending"; now > "$S/event"; }
 case "$1 $2" in
 	"repo view") echo "o/r"; exit 0 ;;
 	"pr view")
+		case "$*" in *mergeable*) echo "${FAKE_MERGEABLE:-MERGEABLE}"; exit 0 ;; esac
 		n="$(count prview)"
 		if [ -n "${FAKE_HEAD_MOVES_TO:-}" ] && [ "$n" -ge 2 ]; then echo "$FAKE_HEAD_MOVES_TO"; else echo "$FAKE_HEAD"; fi
 		exit 0 ;;
@@ -462,6 +463,13 @@ check "gh's own message is shown" has "no checks reported"
 check "reported as neither run nor check" has "no workflow run and no check appeared"
 check "gave up after the 180s appear budget (9 x 20s)" call_count "sleep 20" 9
 check "Copilot is not asked" not_called "pr edit"
+check "no conflict is claimed" hasnt "conflicts with its base"
+
+echo "== --ci-only: no run because the PR conflicts -> the conflict is named"
+FAKE_CI=none FAKE_MERGEABLE=CONFLICTING run 5 --ci-only
+check "exit 3" rc_is 3
+check "CI=none" has "^CI=none$"
+check "the conflict is named" has "conflicts with its base"
 
 echo "== --ci-timeout: checks still running -> exit 3"
 FAKE_CI=pending run 5 --copilot-only --ci-timeout 40
