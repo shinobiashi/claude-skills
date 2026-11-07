@@ -203,6 +203,21 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `wc-email-editor`: saai-signal-mail の SPIKE-1 / PR-17（2026-10-24、PHP 2.19.0 / JS 2.5.1、WooCommerce 10.0.6 / 11.2.1 で
+  本体のブロックメールエディタ on / off）の実測に合わせて直した。§5 の共存ルールは、本体のフィーチャーフラグで判定する案をやめ、
+  `init` 9 にフックテーブル（プレフィックス無しの `Bootstrap`、他プラグインのプレフィックス版）と
+  `woocommerce_email_editor_initialized` の回数で決める「1 リクエスト 1 エンジン」に置き換えた（2 つ起動すると重複登録ではなく
+  `init` の TypeError。名前を特定できないコピーは使わず通知。本体のコピーの互換はクラス名ではなくコンテナのインスタンスで判定し、
+  WC 10.0.6 は `Assets_Manager` が無く非互換）。§3 のテスト送信: `displaySendEmailButton: false` が隠すのはヘッダーのボタンだけで、
+  Preview メニューの「Send a test email」は無条件に描かれるので、`SendPreview` をビルド時に差し替え、REST を優先度 10 で拒否する形に。
+  build-config: `requestToExternal` が同梱すべき 3 パッケージに `undefined`（既定の外部化に落ちる）を返していた誤りを `false` に、
+  `requestToHandle` も同様。スタイルのソースを `style.scss` にしない・パッケージの CSS は相対パスで読む、make-pot の 2 段目
+  （`--include` + `--merge`）、`--no-dev` で原本が `vendor/` に戻る件の配布スクリプトの検査（版の照合、classmap、
+  `autoload_aliases.php`）を追加。integration-recipe: アダプター（`decide()` / `usable()` / `get()` / `cls()`）、`replace_editor` が
+  3 回適用される件のゲート、post-new.php の判定、フォールバックの直接登録、プレビュー送信の拒否。rendering-and-personalization:
+  動いているコピーのクラスで差し込みタグを登録する（本体のコピーが動いているときプレフィックス版の型宣言は TypeError になる、
+  という推論。PR-18 で確かめる）。PHPUnit で本体エディタ on のとき WC がテストのトランザクションを `COMMIT` する件と、その回避も追加。
+  背景: CLAUDE.md §9-5 / ADR-0010 と §5 が矛盾していた（post-merge、ユーザー指示）。
 - `wc-am-internal-license`: テンプレート 1.2.2（クラス `AW_WC_AM_Internal_License_1_2_2`）。jp4wc-pro PR #19 の 3 回目の Codex の指摘（P2）を直した。
   同梱のクライアント（wc-am-client.php 2.12.2）は、ステージングと見たホスト（`.test`・`.local`・`.dev`、`*.wpengine.com`、`staging.` など）で
   `sslverify` を `false` にする。`send_client_request()` はその引数のまま本物のキーを入れて送り直していたので、そうしたサイトでは販売サイトの

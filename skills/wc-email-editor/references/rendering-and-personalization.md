@@ -5,9 +5,7 @@ Source: `packages/php/email-editor/docs/{rendering,personalization-tags}.md` (20
 ## Renderer
 
 ```php
-use Vendor\Automattic\WooCommerce\EmailEditor\Engine\Renderer\Renderer;
-
-$renderer = Package::container()->get( Package::cls( 'Engine\\Renderer\\Renderer' ) );
+$renderer = Package::get( 'Engine\\Renderer\\Renderer' ); // the live copy's (integration-recipe.md)
 
 $out = $renderer->render(
     $post,          // WP_Post of your email post type
@@ -47,22 +45,24 @@ uneditable.
 Token format: `<!--[ns/name attr="value"]-->` inside block content. Register on the registry
 during the `woocommerce_email_editor_register_personalization_tags` filter:
 
-```php
-use Vendor\Automattic\WooCommerce\EmailEditor\Engine\PersonalizationTags\Personalization_Tag;
-use Vendor\Automattic\WooCommerce\EmailEditor\Engine\PersonalizationTags\Personalization_Tags_Registry;
-use Vendor\Automattic\WooCommerce\EmailEditor\Engine\Personalizer;
+Use the live copy's classes here, not `use` statements for your prefixed ones: while
+WooCommerce's copy is live the filter passes its unprefixed registry, and a type hint or a `new`
+on your prefixed classes fails the same way as SKILL.md §5 (follows from the measured TypeError;
+confirm when you wire it).
 
-add_filter( 'woocommerce_email_editor_register_personalization_tags', static function ( Personalization_Tags_Registry $registry ) {
-    $registry->register( new Personalization_Tag(
+```php
+add_filter( 'woocommerce_email_editor_register_personalization_tags', static function ( $registry ) {
+    $tag = Package::cls( 'Engine\\PersonalizationTags\\Personalization_Tag' );
+    $registry->register( new $tag(
         __( 'First name', 'my-plugin' ),   // label in the editor modal
         'customer/first-name',             // token
         __( 'Customer', 'my-plugin' ),     // category
         static fn ( array $context ) => $context['first_name'] ?? '',
         [],                                // attributes with defaults
         null,                              // value interceptor
-        Personalization_Tag::VALUE_TYPE_TEXT // engine escapes per rendering context
+        $tag::VALUE_TYPE_TEXT              // engine escapes per rendering context
     ) );
-    $registry->register( new Personalization_Tag(
+    $registry->register( new $tag(
         __( 'Unsubscribe URL', 'my-plugin' ),
         'my-plugin/unsubscribe-url',
         __( 'Compliance', 'my-plugin' ),
@@ -75,15 +75,15 @@ add_filter( 'woocommerce_email_editor_register_personalization_tags', static fun
 Apply at send time, once per recipient:
 
 ```php
-$personalizer = Package::container()->get( Package::cls( 'Engine\\Personalizer' ) );
+$personalizer = Package::get( 'Engine\\Personalizer' );
 $personalizer->set_context( [
     'recipient_email' => $email,
     'first_name'      => $contact->display_name,
     'unsubscribe_url' => $url,
 ] );
 $html    = $personalizer->personalize_content( $out['html'] );                                        // RENDERING_CONTEXT_HTML
-$text    = $personalizer->personalize_content( $out['text'], Personalizer::RENDERING_CONTEXT_TEXT );
-$subject = $personalizer->personalize_content( $subject,     Personalizer::RENDERING_CONTEXT_TEXT );
+$text    = $personalizer->personalize_content( $out['text'], $personalizer::RENDERING_CONTEXT_TEXT );
+$subject = $personalizer->personalize_content( $subject,     $personalizer::RENDERING_CONTEXT_TEXT );
 ```
 
 Rules: HTML context callbacks return HTML fragments (escape dynamic data) unless
