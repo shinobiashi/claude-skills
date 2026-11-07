@@ -21,11 +21,12 @@
 # Usage:
 #   snapshot.sh save <round>                 record the working tree as <round>
 #                                            (R1, R2, ...); prints the sha
-#   snapshot.sh diff <from> [<to>] [<git-diff options>...]
+#   snapshot.sh diff <from> [<to>] [<git-diff options>...] [-- <paths>...]
 #                                            git diff between two snapshots;
 #                                            <to> defaults to the current
 #                                            working tree. <from>/<to> are round
-#                                            names or any commit-ish
+#                                            names or any commit-ish. <paths>
+#                                            are relative to the repository root
 #   snapshot.sh list                         this branch's snapshots
 #   snapshot.sh clean                        delete this branch's snapshot refs
 #
@@ -115,7 +116,15 @@ case "$cmd" in
 		else
 			to=$(take_snapshot)
 		fi
-		git diff "$@" "$from" "$to"
+		# Options go before the two commits and "-- <paths>" after them:
+		# "git diff -- <paths> A B" reads A and B as paths too and prints
+		# nothing (shinobiashi-ai PR #29).
+		opts=()
+		while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+			opts+=("$1")
+			shift
+		done
+		git diff ${opts[@]+"${opts[@]}"} "$from" "$to" "$@"
 		;;
 	list)
 		[ $# -eq 0 ] || die "usage: snapshot.sh list"

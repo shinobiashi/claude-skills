@@ -73,6 +73,11 @@ out=$(snap diff R1 R2 --stat | tail -1)
 check "diff R1 R2 --stat: 2 files changed" "$(echo "$out" | grep -q '2 files changed'; echo $?)"
 check "diff R2 (no change since): empty" "$([ -z "$(snap diff R2)" ]; echo $?)"
 check "diff accepts a commit-ish" "$([ "$(snap diff "$r1" R2 --name-only)" = "$(snap diff R1 R2 --name-only)" ]; echo $?)"
+# Pathspecs after "--" must not swallow the two trees (shinobiashi-ai PR #29:
+# `diff R1 R2 -- <paths>` printed nothing).
+check "diff R1 R2 --name-only -- a.txt: only a.txt" "$([ "$(snap diff R1 R2 --name-only -- a.txt)" = a.txt ]; echo $?)"
+check "diff R1 --name-only -- tools (to working tree): only tools/new.sh" "$([ "$(snap diff R1 --name-only -- tools)" = tools/new.sh ]; echo $?)"
+check "diff R1 R2 -- a.txt (no options): the fix line is there" "$(snap diff R1 R2 -- a.txt | grep -q '^+three$'; echo $?)"
 
 # 6. list and clean.
 out=$(snap list | awk '{print $1}' | tr '\n' ' ')

@@ -203,6 +203,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `review-loop`: `snapshot.sh diff R1 R2 -- <パス>` が何も出さなかった。オプションと `--` 以降をまとめて 2 つのコミットの前に
+  渡していたので、`git diff -- <パス> R1 R2` になり、R1・R2 もパスとして読まれていた。オプションは 2 つのコミットの前、`--` からは
+  後ろに渡すようにした（shinobiashi-ai PR #29 の review-loop で、R2 の差分をパスで絞ろうとして空振りした）。シナリオテスト 32 → 35 件
+  （3 件は修正前に落ちることを確かめた。macOS の bash 3.2 でも通る）
 - `release-bump`: 版の見出しを readme.txt の `== Changelog ==` の中だけで探すようにした。bump の前に `== Upgrade Notice ==` へ
   `= 3.0.0 =` を書いておいた JP4WC 3.0.0 で、`bump` が「changelog の見出しが既にある」と止まり、しかもその判定が版数の書き換えの
   後にあったので、版数だけ書き換えた状態が残った。同じ取り違えで、changelog の見出しが無くても `check` は `OK heading`、`tag` は

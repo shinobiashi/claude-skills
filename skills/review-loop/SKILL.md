@@ -110,6 +110,7 @@ S=<Base directory for this skill>/scripts/snapshot.sh
 "$S" save R1               # レビュー開始前に。未コミット差分・未追跡ファイル込みの作業ツリーを記録し sha を出す
 "$S" diff R1               # R1 の対象 → 現在の作業ツリー(= R1 の修正だけ。commit したかどうかは問わない)
 "$S" diff R1 R2 --stat     # 保存済みの 2 ラウンド間。git diff のオプションはそのまま渡せる
+"$S" diff R1 R2 -- docs/   # パスで絞る(`--` の後ろ。パスはリポジトリのルートから)
 "$S" list                  # このブランチのスナップショット
 "$S" clean                 # このブランチのスナップショットを消す(ループ終了時・reset 時)
 ```
@@ -117,7 +118,7 @@ S=<Base directory for this skill>/scripts/snapshot.sh
 - HEAD・index(stage 済みの内容)・ブランチ・ファイルは変えない。スナップショットは作業ツリーを tree に、HEAD を親にした
   コミットで、`refs/review-loop/<branch>/R<n>` が保持する(通常の `git push` では送られない)。作業ツリーが clean なら
   HEAD そのものを記録する。`.gitignore` 対象のファイルは入らない
-- `bash scripts/test-snapshot.sh "$PWD/scripts/snapshot.sh"` でシナリオテスト(32 件)が走る(引数は絶対パス)
+- `bash scripts/test-snapshot.sh "$PWD/scripts/snapshot.sh"` でシナリオテスト(35 件)が走る(引数は絶対パス)
 
 ## 重大度定義(全ラウンド共通・全ツール共通)
 
