@@ -118,6 +118,19 @@ status "falling back to the bundled config exits 1, even with equal rules" 1
 has "says so" "CONFIG SOURCE: base uses project config, head uses wp-scripts' bundled eslint.config.cjs"
 has "names the file nothing reads" "NOT READ: .eslintrc.js is still in the head tree"
 
+# A lint script that names its config runs that config, not the one ESLint would look up.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"lint:js":"eslint --config ci.config.js src"}}\n' >"$t/package.json"
+    eslint_rules "$t" '{"a":"error"}'
+done
+printf '{"rules":{"a":"error"}}\n' >"$BASE/stub/eslint-bundled.json"
+printf '{"rules":{}}\n' >"$HEAD/stub/eslint-bundled.json"
+ES --sample src/app.tsx
+status "a rule lost from the script's --config exits 1" 1
+has "says which config was read" "the lint script's ci.config.js"
+has "and what was lost" "LOST (1): a"
+
 # No project config on either side: a bundled file with another name is not the project losing its config.
 fresh
 rm "$BASE/.eslintrc.js" "$HEAD/.eslintrc.js"
@@ -348,6 +361,22 @@ run --base "$BASE" --head "$HEAD" --only jest
 status "the script's --config is compared" 0
 has "and named" "jest (tests/js/jest.config.js)"
 if grep -qx 'tests/js/jest.config.js' "$HEAD/jest-args"; then ok "and passed to Jest"; else bad "and passed to Jest"; fi
+
+# Plain Jest discovers jest.config.*, not wp-scripts' jest-unit.config.js.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test":"jest"}}\n' >"$t/package.json"
+    : >"$t/jest-unit.config.js"
+    : >"$t/jest.config.js"
+    stub_jest_args "$t"
+done
+run --base "$BASE" --head "$HEAD" --only jest
+has "plain jest is compared with jest.config.js" "jest (jest.config.js)"
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:unit":"wp-scripts test-unit-js"}}\n' >"$t/package.json"
+done
+run --base "$BASE" --head "$HEAD" --only jest
+has "wp-scripts prefers jest-unit.config.js" "jest (jest-unit.config.js)"
 
 # Each tree runs its own config: a head that narrows the script's config is compared by that config.
 fresh

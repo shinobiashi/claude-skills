@@ -153,7 +153,8 @@ def script_config(tree, subject, commands, option):
     passed = [config for config in found if config]
     if len(found) > 1 and passed:
         listed = ", ".join(config or "its default config" for config in found)
-        return None, result(subject, "failed", [f"package.json runs it with several configs ({listed}): pass {option}"])
+        hint = f": pass {option}" if option else ""
+        return None, result(subject, "failed", [f"package.json runs it with several configs ({listed}){hint}"])
     return (passed[0] if passed else None), None
 
 
@@ -269,13 +270,23 @@ def rules_status(diff):
 
 
 def read_config(tree, sample, binary, bundled, command):
-    """(config or None, source, error). wp-scripts passes its own config when it finds none."""
+    """(config or None, source, error). A --config in the lint script is what runs; without one,
+    the tool looks its config up, and wp-scripts passes its own when it finds none."""
     exe = tool_path(tree, binary)
     if exe is None:
         return None, None, "not installed"
-    code, out, err = run([exe, "--print-config", sample], tree)
-    source = "project config"
-    if code != 0 and wp_scripts_runs(tree, command):
+    tool = os.path.basename(binary)
+    commands = (rf"wp-scripts {command}", rf"(?<![\w@/.-]){tool}(?![\w.-])")
+    passed, failure = script_config(tree, tool, commands, None)
+    if failure:
+        return None, None, failure["lines"][0]
+    if passed:
+        code, out, err = run([exe, "--config", passed, "--print-config", sample], tree)
+        source = f"the lint script's {passed}"
+    else:
+        code, out, err = run([exe, "--print-config", sample], tree)
+        source = "project config"
+    if code != 0 and not passed and wp_scripts_runs(tree, command):
         for name, extra in bundled:
             path = tool_path(tree, f"{WP_CONFIG}/{name}")
             if path:
@@ -318,7 +329,9 @@ def probe_config(tool, base, head, samples, binary, bundled, command, full, norm
         diff = compare_rules(old.get("rules", {}), new.get("rules", {}), normalize(old), normalize(new))
         lines = rules_lines(diff, full)
         status = rules_status(diff)
-        if old_source != new_source and source_kind(old_source) == source_kind(new_source):
+        if old_source == new_source and old_source != "project config":
+            lines.insert(0, f"config: {old_source}")  # say what was compared when it is not the lookup
+        elif old_source != new_source and source_kind(old_source) == source_kind(new_source):
             lines.insert(0, f"config: base uses {old_source}, head uses {new_source}")
         elif old_source != new_source:
             lines.insert(0, f"CONFIG SOURCE: base uses {old_source}, head uses {new_source}")
@@ -428,7 +441,9 @@ def jest_setup(tree, explicit):
     config, failure = script_config(tree, "jest", JEST_COMMANDS, "--jest-config")
     if failure:
         return None, None, failure["lines"][0]
-    config = config or next((name for name in JEST_CONFIGS if tool_path(tree, name)), None)
+    # jest-unit.config.* is a wp-scripts name: plain Jest only discovers jest.config.*.
+    names = JEST_CONFIGS if wp_scripts_runs(tree, "test-unit-js") else [n for n in JEST_CONFIGS if n.startswith("jest.config")]
+    config = config or next((name for name in names if tool_path(tree, name)), None)
     if config:
         return config, ["--config", config], None
     if "jest" in package_json(tree):

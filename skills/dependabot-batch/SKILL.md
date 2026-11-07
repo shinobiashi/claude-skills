@@ -190,7 +190,7 @@ ESLint・Stylelint は実際に効いている設定、PHPCS は sniff の一覧
 | `SAME` | 比べた範囲は同じ | 下の「`SAME` の読み方」を見る |
 | `SKIPPED` | 設定が無く、package.json の scripts にも使っている形跡が無い | 対応なし |
 
-同梱の設定どうしでファイル名だけが変わったとき（`.eslintrc.js` → `eslint.config.cjs`）は、`CONFIG SOURCE` ではなく `config:` の行に出る。プロジェクトの設定はもともと無いので、直すものは無い。
+同梱の設定どうしでファイル名だけが変わったとき（`.eslintrc.js` → `eslint.config.cjs`）は、`CONFIG SOURCE` ではなく `config:` の行に出る。プロジェクトの設定はもともと無いので、直すものは無い。lint やテストのスクリプトが `--config` を渡していれば、ツリーごとにその設定を読み、`config:` の行に出す。
 
 `LOST` が出ても、それだけで壊れているとは限らない。逆に `SAME` も実際に動く保証にはならない。**lint・解析ツール本体の major では、全部 `SAME` でも誤りを 1 つ入れて検出を確かめる**。`CONFIG SOURCE`・`OPTIONS DROPPED` が出たものは、直した後に必ず確かめる。手順は `references/detection-checks.md` を読む。
 
