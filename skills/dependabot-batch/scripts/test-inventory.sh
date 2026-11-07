@@ -190,7 +190,7 @@ b8 = "dependabot/github_actions/softprops/action-gh-release-3"
 h8 = pr(8, "ci: bump softprops/action-gh-release from 2 to 3", b8,
         [bot(meta(("softprops/action-gh-release", "'3'", "production", "major")))], files=(".github/workflows/ci.yml",))
 runs(b8, run(81, b8, h8))
-jobs(81, ("php (8.3)", "success", steps(("Notes on 8.3", "success"))),
+jobs(81, ("php (8.3)", "success", steps(("Notes on 8.3", "success"), ("Upload notes (8.3)", "skipped"))),
      ("release", "skipped", []))
 put(f"api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/ci.yml?ref={h8}", """name: CI
 jobs:
@@ -201,10 +201,15 @@ jobs:
     steps:
       - name: Notes on ${{ matrix.php }}
         uses: softprops/action-gh-release@v3
+      - name: Upload notes (${{ matrix.php }})
+        if: failure()
+        uses: softprops/action-gh-release@v3
   release:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Publish the release
+        uses: softprops/action-gh-release@v3
+      - name: ${{ matrix.label }}
         uses: softprops/action-gh-release@v3
 """)
 
@@ -223,6 +228,21 @@ runs(b10, dict(run(101, b10, h10, conclusion="failure"), event="push"),
 jobs(101, ("JS", "failure", steps(("ESLint", "failure"), ("Build", "skipped"))))
 jobs(102, ("JS", "success", GREEN_JS))
 put("run view 101 --attempt 1 --log-failed", "")
+
+# #11: a Babel major writes what ships, like any build tool.
+b11 = "dependabot/npm_and_yarn/babel/preset-react-8.0.0"
+h11 = pr(11, "chore(deps-dev): bump @babel/preset-react from 7.27.1 to 8.0.0", b11,
+         [bot(meta(("@babel/preset-react", "8.0.0", "development", "major")))])
+runs(b11, run(111, b11, h11))
+jobs(111, ("JS", "success", GREEN_JS))
+
+# #12: both events share a concurrency group, so one run is cancelled; the other passed.
+b12 = "dependabot/npm_and_yarn/bar-2.0.0"
+h12 = pr(12, "chore(deps-dev): bump bar from 1.0.0 to 2.0.0", b12, [bot(meta(("bar", "2.0.0", "development", "major")))])
+runs(b12, dict(run(121, b12, h12, conclusion="cancelled"), event="push"),
+     dict(run(122, b12, h12, created="2026-11-05T00:01:00Z"), event="pull_request"))
+jobs(121, ("JS", "cancelled", steps(("ESLint", "success"), ("Jest (unit)", "cancelled"), ("Build", "skipped"))))
+jobs(122, ("JS", "success", GREEN_JS))
 PY
 
 echo "inventory.py"
@@ -283,7 +303,7 @@ has "PRs that Dependabot leaves alone" "PRs Dependabot will not rebase: #4 #7"
 has "an old PR that Dependabot stopped rebasing" "older than 30 days, no automatic rebase (ask with \`@dependabot rebase\`): #5"
 
 echo "== what a skipped job hides"
-run 8 9 10
+run 8 9 10 11 12
 status "reads the second batch" 0
 if [ -f "$FX/.misses" ]; then echo "  (unexpected gh calls)"; sed 's/^/    /' "$FX/.misses"; fi
 has "an action in a job skipped as a whole is not proved" \
@@ -295,6 +315,15 @@ has "jobs a failure kept from starting are never reached" "#9 jobs never reached
 hasnt "and are not read as skipped by a condition" "test (.github/workflows/ci.yml)"
 has "a red push run is not hidden by a green pull_request run" "| #10 | npm | dev | foo 1.0.0 -> 2.0.0 | major | fail |"
 has "and its failure shows" "#10 failed: JS / ESLint -> never reached: Build"
+# shellcheck disable=SC2016  # the literal ${{ }} of a workflow file
+has "a step named by an expression alone matches nothing, so it is not proved" \
+    'step "${{ matrix.label }}" in .github/workflows/ci.yml: not seen in the run'
+# shellcheck disable=SC2016  # the literal ${{ }} of a workflow file
+has "a conditional matrix step a bumped action uses is reported" 'step "Upload notes (${{ matrix.php }})" in .github/workflows/ci.yml: skipped'
+hasnt "and is not also listed as using none of them" "Upload notes (8.3)"
+has "a Babel major is a build tool major" "build tool majors, check what ships too: #11"
+has "a cancelled run beside a passing one of the same workflow is no failure" "| #12 | npm | dev | bar 1.0.0 -> 2.0.0 | major | pass |"
+hasnt "and its cancelled step is not a failure" "#12 failed"
 
 echo "== default selection"
 run

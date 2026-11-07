@@ -183,7 +183,7 @@ ESLint・Stylelint は実際に効いている設定、PHPCS は sniff の一覧
 | `OPTIONS DROPPED` | プロジェクトが設定したオプションが消えた | 直す（text domain の指定はここに出る） |
 | `LOST` | 効いていたルールが消えた | 上流の意図的な削除なら記録して通す。リリースノートや変更履歴で確かめる |
 | `WEAKENED` | error が warn になった（Stylelint の `defaultSeverity` を含む）。TypeScript では strict 系のチェックが外れた | CI は warn で落ちないので、意図した変更かを確かめる |
-| `FAILED` | ツールが設定を出せない、入っていない、または package.json が使っているのに設定が見つからない | **差分なしと読まない**。ツールが動かない場合と、準備のステップ（依存の導入・ビルド）が足りない場合がある |
+| `FAILED` | ツールが設定を出せない、入っていない、または package.json が使っているのに設定が見つからない | **差分なしと読まない**。ツールが動かない場合と、準備のステップ（依存の導入・ビルド）が足りない場合がある。設定の場所が違うだけなら `--jest-config`・`--playwright-config` で渡す |
 | `CHANGED` | オプションの変化やルールの追加だけ | 内容を見る。止める必要はない |
 | `SAME` | 比べた範囲は同じ | 下の「`SAME` の読み方」を見る |
 | `SKIPPED` | 設定が無く、package.json の scripts にも使っている形跡が無い | 対応なし |

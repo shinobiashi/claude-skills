@@ -338,6 +338,17 @@ else
     echo "  (node not found: the bundled Jest config cases are not run)"
 fi
 
+# A config the npm script hands over is what wp-scripts runs, not its bundled one.
+fresh
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:unit":"wp-scripts test-unit-js --config tests/js/jest.config.js"}}\n' >"$t/package.json"
+    stub_jest_args "$t"
+done
+run --base "$BASE" --head "$HEAD" --only jest
+status "the script's --config is compared" 0
+has "and named" "jest (tests/js/jest.config.js)"
+if grep -qx 'tests/js/jest.config.js' "$HEAD/jest-args"; then ok "and passed to Jest"; else bad "and passed to Jest"; fi
+
 fresh
 printf '{"scripts":{"test":"jest --ci"}}\n' >"$BASE/package.json"
 run --base "$BASE" --head "$HEAD" --only jest
@@ -398,10 +409,20 @@ if grep -qx 'node_modules/@wordpress/scripts/config/playwright.config.js' "$HEAD
 else
     bad "and passes it as wp-scripts does"
 fi
+for t in "$BASE" "$HEAD"; do
+    printf '{"scripts":{"test:e2e":"wp-scripts test-playwright --config tests/e2e/playwright.config.ts"}}\n' >"$t/package.json"
+done
+run --base "$BASE" --head "$HEAD" --only playwright
+status "the script's --config is compared, not the bundled one" 0
+has "and named" "playwright (tests/e2e/playwright.config.ts)"
+if grep -qx 'tests/e2e/playwright.config.ts' "$HEAD/pw-args"; then ok "and passed to Playwright"; else bad "and passed to Playwright"; fi
+run --base "$BASE" --head "$HEAD" --only playwright --playwright-config e2e/other.config.ts
+has "--playwright-config wins" "playwright (e2e/other.config.ts)"
 fresh
 printf '{"scripts":{"test:e2e":"playwright test"}}\n' >"$BASE/package.json"
 run --base "$BASE" --head "$HEAD" --only playwright
 status "package.json runs Playwright but no config is found: a failure" 1
+has "says what to pass" "pass --playwright-config"
 
 echo "== phpcs"
 fresh

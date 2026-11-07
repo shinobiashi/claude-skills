@@ -14,7 +14,10 @@ Usage:
   --only TOOLS             comma list of eslint,stylelint,tsc,jest,playwright,phpcs,phpstan,
                            phpunit,assets. Pass the side that changed: an npm-only update does
                            not need composer install, if the PHP tools are left out.
-  --jest-config FILE       default: jest-unit.config.* or jest.config.*
+  --jest-config FILE       default: the --config a package.json script passes, jest-unit.config.*
+                           or jest.config.*, the jest key, then wp-scripts' bundled config
+  --playwright-config FILE default: the --config a package.json script passes,
+                           playwright.config.*, then wp-scripts' bundled config
   --phpunit-config FILE    default: phpunit.xml(.dist)
   --build-dir DIR          where *.asset.php lie (default: build, assets/build, dist)
   --full                   list every name instead of the first 40 in a group
@@ -119,6 +122,18 @@ def scripts_use(tree, *words):
 
 def wp_scripts_runs(tree, command):
     return scripts_use(tree, f"wp-scripts {command}")
+
+
+def script_config(tree, *commands):
+    """The config a package.json script hands to one of these commands (--config X, -c X):
+    with one, wp-scripts runs it instead of its bundled config, so that is what to compare."""
+    for value in package_json(tree).get("scripts", {}).values():
+        for segment in re.split(r"&&|\|\||;", str(value)):
+            if any(command in segment for command in commands):
+                found = re.search(r"(?:--config[=\s]|\s-c\s)\s*(['\"]?)([^\s'\"]+)\1", segment)
+                if found:
+                    return found.group(2)
+    return None
 
 
 def missing_tool(subject, base, head, binary, configs):
@@ -385,7 +400,8 @@ def bundled_jest_config(tree):
 
 
 def probe_jest(base, head, config, full):
-    config = config or next((name for name in JEST_CONFIGS if tool_path(base, name)), None)
+    config = (config or script_config(base, "wp-scripts test-unit-js", "jest ")
+              or next((name for name in JEST_CONFIGS if tool_path(base, name)), None))
     if config:
         label, args = config, {base: ["--config", config], head: ["--config", config]}
     elif "jest" in package_json(base):
@@ -409,10 +425,13 @@ def probe_jest(base, head, config, full):
     return probe_list(f"jest ({label})", base, head, command, keep, full, label="test files listed")
 
 
-def probe_playwright(base, head, full):
+def probe_playwright(base, head, config, full):
     binary = "node_modules/.bin/playwright"
     bundled = f"{WP_CONFIG}/playwright.config.js"
-    if any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
+    config = config or script_config(base, "wp-scripts test-playwright", "playwright test")
+    if config:
+        subject, args = f"playwright ({config})", ["--config", config]
+    elif any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
         subject, args = "playwright", []
     elif wp_scripts_runs(base, "test-playwright"):
         # What wp-scripts test-playwright runs when the project has no config of its own.
@@ -421,7 +440,7 @@ def probe_playwright(base, head, full):
         if missing:
             return [result(subject, "failed", [f"{side}: {bundled} is missing: install the dependencies" for side in missing])]
     elif scripts_use(base, "playwright"):
-        return [result("playwright", "failed", ["package.json runs Playwright, but no config was found"])]
+        return [result("playwright", "failed", ["package.json runs Playwright, but no config was found: pass --playwright-config"])]
     else:
         return [result("playwright", "skipped", ["no Playwright config, and package.json does not run it"])]
     if not (tool_path(base, binary) and tool_path(head, binary)):
@@ -574,6 +593,7 @@ def main():
     parser.add_argument("--sample", action="append", default=[])
     parser.add_argument("--only", default=",".join(ALL_TOOLS))
     parser.add_argument("--jest-config")
+    parser.add_argument("--playwright-config")
     parser.add_argument("--phpunit-config")
     parser.add_argument("--build-dir")
     parser.add_argument("--full", action="store_true")
@@ -603,7 +623,7 @@ def main():
         "stylelint": lambda: probe_stylelint(base, head, args.sample, args.full),
         "tsc": lambda: probe_tsc(base, head, args.full),
         "jest": lambda: probe_jest(base, head, args.jest_config, args.full),
-        "playwright": lambda: probe_playwright(base, head, args.full),
+        "playwright": lambda: probe_playwright(base, head, args.playwright_config, args.full),
         "phpcs": lambda: probe_phpcs(base, head, args.full),
         "phpstan": lambda: probe_phpstan(base, head, args.full),
         "phpunit": lambda: probe_phpunit(base, head, args.phpunit_config, args.full),

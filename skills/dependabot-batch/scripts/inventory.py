@@ -44,8 +44,8 @@ TOOL = re.compile(
 TEST_ENV = re.compile(r"^(playwright|@playwright/|@wordpress/(env|e2e-test-utils))")
 # These write what ships: the bundles and the *.asset.php dependency lists.
 BUILD = re.compile(
-    r"^(webpack|webpack-cli|babel-loader|@babel/|esbuild|rollup|vite|terser|postcss|sass|"
-    r"@wordpress/(scripts|babel-preset-default|dependency-extraction-webpack-plugin))(/|$)"
+    r"^(?:@babel/|(?:webpack|webpack-cli|babel-loader|esbuild|rollup|vite|terser|postcss|sass|"
+    r"@wordpress/(?:scripts|babel-preset-default|dependency-extraction-webpack-plugin))$)"
 )
 LOG_PREFIX = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -233,6 +233,10 @@ def inspect_ci(repo, pr, workflows):
     for run in sorted(runs, key=lambda r: r.get("created_at", "")):
         if run.get("head_sha") == head:
             latest[(run["path"], run.get("event"))] = run
+    # A concurrency group shared by both events cancels one of the two runs: that is no failure
+    # while the same workflow has a run on this head that was not cancelled.
+    alive = {path for (path, _), run in latest.items() if run.get("conclusion") != "cancelled"}
+    latest = {key: run for key, run in latest.items() if run.get("conclusion") != "cancelled" or key[0] not in alive}
 
     ci = {"state": "none", "jobs": [], "retried": [], "older_failures": [], "not_triggered": []}
     states = []
@@ -326,6 +330,8 @@ def step_matcher(name):
     parts = re.split(r"\$\{\{.*?\}\}", name)
     if len(parts) == 1:
         return lambda shown: shown == name
+    if not any(part.strip() for part in parts):
+        return lambda shown: False  # a name that is only an expression matches every step
     pattern = re.compile("^" + ".+".join(re.escape(part) for part in parts) + "$")
     return lambda shown: bool(pattern.match(shown))
 
@@ -458,7 +464,8 @@ def print_report(repo, prs):
         print("- nothing found")
     # Only an action bump can be matched to the steps that use it. An npm or Composer update can
     # still reach these steps through a script, so they are listed, not cleared.
-    unrelated = sorted(conditional - updated_steps)
+    matchers = [step_matcher(step) for step in updated_steps]
+    unrelated = sorted(step for step in conditional if not any(matches(step) for matches in matchers))
     if unrelated:
         print(f"- for information, conditional steps that use none of the bumped actions: {', '.join(unrelated)}")
     if conditional_jobs:

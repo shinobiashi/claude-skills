@@ -13,8 +13,8 @@
   `needs:` で始まらなかったジョブ、人のコミットの有無、30 日超の PR、ビルドツールの major）を PR ごとに並べる。`update-type` はタイトルの推測ではなく Dependabot の
   コミット本文から読む。`scripts/run-steps.sh` が CI のステップを失敗しても最後まで流し（`--repeat N --load` で不安定さを測る。CPU の負荷は、スクリプトが
   強制終了されても見張りのプロセスが止める）、`scripts/rules-diff.py` が ESLint・Stylelint の実効設定、PHPCS の sniff、PHPStan のパラメータ、tsconfig、Jest・Playwright・PHPUnit の一覧、
-  `*.asset.php` の依存を 2 つの木で比べる（`wp-scripts` が同梱の設定で動いている場合はそれを読み、`CONFIG SOURCE` / `NOT READ` として出す。Jest・Playwright も
-  `wp-scripts` の同梱の設定に切り替える。プローブの失敗と、package.json が使っているのに設定が見つからないことは差分なしと読まない。
+  `*.asset.php` の依存を 2 つの木で比べる（`wp-scripts` が同梱の設定で動いている場合はそれを読み、`CONFIG SOURCE` / `NOT READ` として出す。Jest・Playwright は npm スクリプトが渡す
+  `--config` を読み、無ければ `wp-scripts` の同梱の設定に切り替える。プローブの失敗と、package.json が使っているのに設定が見つからないことは差分なしと読まない。
   Stylelint の `defaultSeverity` と TypeScript の strict 系のチェックが外れたことは `WEAKENED` として出す）。`scripts/merge-sim.sh` が `git merge-tree` と `git commit-tree` だけで順番にマージした結果を試す（ワーキングツリーもブランチも
   変えない。`--plan` で base と単独で衝突する PR・衝突する組・推奨順・番号順。`--method squash` はスタックした PR の衝突を出す）。`references/` に検出力の確認（わざと誤りを入れる）と
   ロックファイルの衝突の解き方を置いた。saai-inventory の PR #43〜#55 の実データで再現を確かめた: `inventory.py` は #44・#52 の再実行前の失敗（同じ
@@ -22,7 +22,7 @@
   衝突し（実際に衝突した 3 本）、推奨順なら手作業が無く、squash だと #54 が衝突することを出す。`rules-diff.py` は Dependabot の生のコミット `a183ef2` で
   `.eslintrc.js` が読まれていないこと・text domain の `allowedTextDomain` が消えたこと・Jest が無いことを出し、修正後の `1022f71` ではそれらが消える。
   PHPCS は #49 で 307 → 308、減った sniff は 0（当時の結果と同じ）。`run-steps.sh` は `a183ef2` で CI が届かなかった `test:unit` の失敗も出す。
-  シナリオテスト 293 件（`scripts/test-*.sh`。ネットワーク不要）。主要な 10 の振る舞いは、壊すと名指しのテストが落ちることを確かめた。
+  シナリオテスト 307 件（`scripts/test-*.sh`。ネットワーク不要）。主要な 10 の振る舞いは、壊すと名指しのテストが落ちることを確かめた。
   文脈を持たない別のエージェントに、#59・#60 で手順を読み通してもらい（GitHub への書き込みなし）、出た問題を直した: 依存を入れ忘れた `SKIPPED` が exit 0 だった
   （設定ファイルがあるのにツールが無ければ `FAILED`）、E2E ヘルパーの major を確かめる経路が無かった（`major (test env)` と Playwright のプローブ）、§8 の tip が
   番号順を指していた、PR 本文の changelog が途中で切れて間の major が見えない、ビルド出力の丸ごとの比較が無かった、など。
@@ -31,7 +31,9 @@
   PR 前のセルフレビュー（独立したエージェント）で High 2 件・Medium 10 件を直した: ジョブごと飛ばされたジョブの Action を「動いた」と判定していた、ビルドツールの major が
   出荷物の確認に回らなかった、`on: [push, pull_request]` の 2 本目の run が赤を隠していた、`wp-scripts` の同梱設定で動く Jest・Playwright と未ビルドが
   `SKIPPED` だった、base と単独で衝突する PR が組の衝突として出ていた、`git merge-tree` のエラーを衝突と読んでいた、`composer update --lock` が
-  lock の版を変えない、など。追加したテストは、修正前のスクリプトではすべて落ちることを確かめた。
+  lock の版を変えない、など。検証のラウンド（R2）でも、`@babel/*` がビルドツールに一致しない正規表現、npm スクリプトが渡す `--config` を
+  無視して同梱の設定を比べる、同じ concurrency グループで取り消された run を赤と数える、などを直した。追加したテストは、修正前のスクリプトでは
+  すべて落ちることを確かめた。
   背景: saai-inventory の 2026-11-05 のバッチ（ユーザー指示）
 - `wc-am-internal-license`: 新規。WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、
   社内ライセンスの mu-plugin を生成する。wp-config.php の定数の社内用アカウントのユーザーライセンスキー（API Manager 3.8 からの
