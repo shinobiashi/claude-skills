@@ -420,59 +420,85 @@ def bundled_jest_config(tree):
     return (out, None) if code == 0 and out.startswith("{") else (None, first_error(err, out))
 
 
-def probe_jest(base, head, config, full):
-    if not config:
-        config, failure = script_config(base, "jest", JEST_COMMANDS, "--jest-config")
-        if failure:
-            return [failure]
-    config = config or next((name for name in JEST_CONFIGS if tool_path(base, name)), None)
+def jest_setup(tree, explicit):
+    """(label, args, failure) in one tree, picked the way wp-scripts and Jest pick the config.
+    (None, None, None) means the tree shows no sign of Jest."""
+    if explicit:
+        return explicit, ["--config", explicit], None
+    config, failure = script_config(tree, "jest", JEST_COMMANDS, "--jest-config")
+    if failure:
+        return None, None, failure["lines"][0]
+    config = config or next((name for name in JEST_CONFIGS if tool_path(tree, name)), None)
     if config:
-        label, args = config, {base: ["--config", config], head: ["--config", config]}
-    elif "jest" in package_json(base):
-        label, args = "package.json", {base: [], head: []}  # Jest reads the key by itself
-    elif wp_scripts_runs(base, "test-unit-js"):
-        label, args = "wp-scripts' bundled jest-unit.config.js", {}
-        errors = []
-        for side, tree in (("base", base), ("head", head)):
-            json_config, error = bundled_jest_config(tree)
-            if error:
-                errors.append(f"{side}: {error}")
-            args[tree] = ["--config", json_config]
-        if errors:
-            return [result(f"jest ({label})", "failed", errors)]
-    elif scripts_use(base, "jest"):
-        return [result("jest", "failed", ["package.json runs Jest, but no config was found: pass --jest-config"])]
-    else:
-        return [result("jest", "skipped", ["no Jest config, and package.json does not run Jest"])]
+        return config, ["--config", config], None
+    if "jest" in package_json(tree):
+        return "package.json", [], None  # Jest reads the key by itself
+    if wp_scripts_runs(tree, "test-unit-js"):
+        json_config, error = bundled_jest_config(tree)
+        return "wp-scripts' bundled jest-unit.config.js", ["--config", json_config], error
+    if scripts_use(tree, "jest"):
+        return None, None, "package.json runs Jest, but no config was found: pass --jest-config"
+    return None, None, None
+
+
+def playwright_setup(tree, explicit):
+    """The same for Playwright: a script's --config, a config file, then wp-scripts' bundled one."""
+    if explicit:
+        return explicit, ["--config", explicit], None
+    config, failure = script_config(tree, "playwright", PLAYWRIGHT_COMMANDS, "--playwright-config")
+    if failure:
+        return None, None, failure["lines"][0]
+    if config:
+        return config, ["--config", config], None
+    found = next((name for name in PLAYWRIGHT_CONFIGS if tool_path(tree, name)), None)
+    if found:
+        return found, [], None
+    if wp_scripts_runs(tree, "test-playwright"):
+        bundled = f"{WP_CONFIG}/playwright.config.js"
+        error = None if tool_path(tree, bundled) else f"{bundled} is missing: install the dependencies"
+        return "wp-scripts' bundled playwright.config.js", ["--config", bundled], error
+    if scripts_use(tree, "playwright"):
+        return None, None, "package.json runs Playwright, but no config was found: pass --playwright-config"
+    return None, None, None
+
+
+def resolve_runner(tool, name, setup, base, head, explicit):
+    """Each tree's own config: a PR can change the script or the config file it names, and a
+    config taken from the base alone would compare the head's tests by the base's rules.
+    Returns (subject, args by tree, a finished result or None)."""
+    setups = {tree: setup(tree, explicit) for tree in (base, head)}
+    (old_label, _, old_err), (new_label, _, new_err) = setups[base], setups[head]
+    if old_label is None and new_label is None and not old_err and not new_err:
+        return tool, {}, result(tool, "skipped", [f"no {name} config, and package.json does not run it"])
+    subject = f"{tool} ({old_label or new_label})"
+    errors = [f"{side}: {err}" for side, err in (("base", old_err), ("head", new_err)) if err]
+    errors += [f"{side}: no {name} config, and package.json does not run it"
+               for side, label, err in (("base", old_label, old_err), ("head", new_label, new_err))
+               if label is None and not err]
+    if errors:
+        return subject, {}, result(subject, "failed", errors)
+    if old_label != new_label:
+        subject = f"{tool} (base {old_label}, head {new_label})"
+    return subject, {tree: setups[tree][1] for tree in (base, head)}, None
+
+
+def probe_jest(base, head, config, full):
+    subject, args, done = resolve_runner("jest", "Jest", jest_setup, base, head, config)
+    if done:
+        return [done]
     command = lambda tree: [os.path.join(tree, "node_modules/.bin/jest"), "--listTests", *args[tree]]
     keep = lambda line: not line.startswith(("Error", "at "))
-    return probe_list(f"jest ({label})", base, head, command, keep, full, label="test files listed")
+    return probe_list(subject, base, head, command, keep, full, label="test files listed")
 
 
 def probe_playwright(base, head, config, full):
     binary = "node_modules/.bin/playwright"
-    bundled = f"{WP_CONFIG}/playwright.config.js"
-    if not config:
-        config, failure = script_config(base, "playwright", PLAYWRIGHT_COMMANDS, "--playwright-config")
-        if failure:
-            return [failure]
-    if config:
-        subject, args = f"playwright ({config})", ["--config", config]
-    elif any(tool_path(base, name) for name in PLAYWRIGHT_CONFIGS):
-        subject, args = "playwright", []
-    elif wp_scripts_runs(base, "test-playwright"):
-        # What wp-scripts test-playwright runs when the project has no config of its own.
-        subject, args = "playwright (wp-scripts' bundled playwright.config.js)", ["--config", bundled]
-        missing = [side for side, tree in (("base", base), ("head", head)) if not tool_path(tree, bundled)]
-        if missing:
-            return [result(subject, "failed", [f"{side}: {bundled} is missing: install the dependencies" for side in missing])]
-    elif scripts_use(base, "playwright"):
-        return [result("playwright", "failed", ["package.json runs Playwright, but no config was found: pass --playwright-config"])]
-    else:
-        return [result("playwright", "skipped", ["no Playwright config, and package.json does not run it"])]
+    subject, args, done = resolve_runner("playwright", "Playwright", playwright_setup, base, head, config)
+    if done:
+        return [done]
     if not (tool_path(base, binary) and tool_path(head, binary)):
         return [result(subject, "failed", [f"{binary} is missing in a tree: install the dependencies, or leave the tool out with --only"])]
-    command = lambda tree: [os.path.join(tree, binary), "test", "--list", *args]
+    command = lambda tree: [os.path.join(tree, binary), "test", "--list", *args[tree]]
     # An edit above a test moves its line number; that is the same test.
     clean = lambda line: re.sub(r":\d+:\d+", "", line)
     return probe_list(subject, base, head, command, lambda line: "\u203a" in line, full, clean=clean)

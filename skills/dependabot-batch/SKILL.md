@@ -150,7 +150,9 @@ bash "$D/run-steps.sh" --dir "$S/pr54" --log-dir "$S/logs/pr54" -- \
   'npm run lint:js' 'npm run lint:css' 'npm run check-types' 'npm run test:unit' 'npm run build'
 ```
 
-失敗しても最後まで流れるので、CI を何周もせずに全部の問題が一度に見える（#54 では `lint:js` に加えて、CI が届かなかった `test:unit` の失敗も見えた）。
+失敗しても最後まで流れるので、CI を何周もせずに全部の問題が一度に見える（#54 では `lint:js` に加えて、CI が届かなかった `test:unit` の失敗も見えた）。各コマンドは Actions の既定のシェルと同じ `bash -e` で流れ、複数行のステップは途中の失敗で止まる。`shell: bash` のステップは CI では pipefail も付くので、コマンドの先頭に `set -o pipefail;` を足す。
+
+`inventory.py` の「jobs skipped after the failure」は、失敗したジョブを `needs:` で待っていたのか、自分の `if:` で飛ばされたのかを区別できない（API が理由を返さない）。ワークフローの `needs:` と `if:` を読んで、ローカルで流すジョブを決める。
 
 先頭に出る Node と PHP の版を CI と比べる。`.nvmrc` があれば nvm で切り替えるが、PHP は手元の版のままなので報告に書く。wp-env や E2E のようにローカルで流せなかったものは、「未実行」として報告する。
 

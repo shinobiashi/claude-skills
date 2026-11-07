@@ -13,7 +13,10 @@
 #   --load         keep every CPU busy meanwhile; timing failures tend to need it
 #   -h, --help     this text
 #
-# Each CMD runs in `bash -c` from DIR. With an .nvmrc and nvm installed, the Node it names is used.
+# Each CMD runs in `bash -e -c` from DIR, as GitHub Actions runs a `run:` step with no `shell:`
+# (`bash -e {0}`): a multiline step stops at its first failing line instead of passing on the last
+# one. A step with `shell: bash` also has pipefail there; start its CMD with `set -o pipefail;`.
+# With an .nvmrc and nvm installed, the Node it names is used.
 # The Node and PHP versions are printed first: a result is only as good as those versions are
 # close to CI's, and the report has to say which ones it ran on.
 #
@@ -108,7 +111,7 @@ for cmd in "${CMDS[@]}"; do
     last_fail=""
     while [ "$round" -le "$REPEAT" ]; do
         log="$LOG_DIR/$(printf '%02d' "$step")-$slug.$round.log"
-        if bash -c "$cmd" >"$log" 2>&1 </dev/null; then
+        if bash -e -c "$cmd" >"$log" 2>&1 </dev/null; then
             passes=$((passes + 1))
         else
             rc=$?

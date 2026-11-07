@@ -349,6 +349,24 @@ status "the script's --config is compared" 0
 has "and named" "jest (tests/js/jest.config.js)"
 if grep -qx 'tests/js/jest.config.js' "$HEAD/jest-args"; then ok "and passed to Jest"; else bad "and passed to Jest"; fi
 
+# Each tree runs its own config: a head that narrows the script's config is compared by that config.
+fresh
+printf '{"scripts":{"test:unit":"jest --config all.config.js"}}\n' >"$BASE/package.json"
+printf '{"scripts":{"test:unit":"jest --config subset.config.js"}}\n' >"$HEAD/package.json"
+stub_jest_args "$BASE"
+stub_jest_args "$HEAD"
+run --base "$BASE" --head "$HEAD" --only jest
+has "a config that changed shows both" "jest (base all.config.js, head subset.config.js)"
+if grep -qx 'all.config.js' "$BASE/jest-args" && grep -qx 'subset.config.js' "$HEAD/jest-args"; then
+    ok "and each tree is listed with its own"
+else
+    bad "and each tree is listed with its own"
+fi
+printf '{"scripts":{"build":"webpack"}}\n' >"$HEAD/package.json"
+run --base "$BASE" --head "$HEAD" --only jest
+status "Jest set up in the base only is a failure" 1
+has "says which side lost it" "head: no Jest config, and package.json does not run it"
+
 # Two suites with other configs: picking one would compare the wrong suite and could read as SAME.
 fresh
 for t in "$BASE" "$HEAD"; do

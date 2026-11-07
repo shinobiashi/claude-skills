@@ -194,8 +194,9 @@ def step_view(job):
 
 
 def mark_skipped_jobs(views):
-    """A job skipped as a whole has no steps. After a failure in the run it never got its turn
-    (`needs:`); otherwise a condition kept it out (`if:` on the job, such as a tag-only release)."""
+    """A job skipped as a whole has no steps, and the API does not say why. With no failure in the
+    run, a condition kept it out (`if:` on the job, such as a tag-only release). After a failure it
+    may have waited on the failed job (`needs:`) or had a condition of its own: both are possible."""
     run_failed = any(v["failed"] or v["conclusion"] in ("failure", "timed_out", "cancelled") for v in views)
     for view in views:
         if view["conclusion"] == "skipped" and not (view["ran"] or view["failed"] or view["unreached"] or view["conditional"]):
@@ -425,7 +426,8 @@ def print_report(repo, prs):
         blocked = [v["job"] for v in ci["jobs"] if v.get("skipped_job") == "unreached"]
         if blocked:
             quiet = False
-            print(f"- #{pr['number']} jobs never reached after the failure: {', '.join(blocked)}")
+            print(f"- #{pr['number']} jobs skipped after the failure (`needs:` on the failed job, or a condition "
+                  f"of their own): {', '.join(blocked)}")
         for view in ci["older_failures"]:
             quiet = False
             unreached = f" -> never reached: {', '.join(view['unreached'])}" if view["unreached"] else ""
@@ -460,12 +462,13 @@ def print_report(repo, prs):
     for path, numbers in sorted(not_triggered.items()):
         found = True
         print(f"- workflow with no run on the head: {path} ({' '.join(f'#{n}' for n in sorted(numbers))})")
-    if not found:
-        print("- nothing found")
     # Only an action bump can be matched to the steps that use it. An npm or Composer update can
     # still reach these steps through a script, so they are listed, not cleared.
     matchers = [step_matcher(step) for step in updated_steps]
     unrelated = sorted(step for step in conditional if not any(matches(step) for matches in matchers))
+    if not found:
+        # The lines below are still unproved; "nothing found" above them would read as all clear.
+        print("- nothing tied to a bumped action or a workflow with no run" if unrelated or conditional_jobs else "- nothing found")
     if unrelated:
         print(f"- for information, conditional steps that use none of the bumped actions: {', '.join(unrelated)}")
     if conditional_jobs:

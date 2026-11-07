@@ -30,6 +30,12 @@ has "its exit code is on the log line" "(exit 3)"
 has "the total counts it" "steps=3 failed=1"
 if [ -f "$W/tree/c.txt" ]; then ok "the step after a failure still ran"; else bad "the step after a failure still ran"; fi
 
+echo "== a step stops at its first failing line"
+# Actions runs `run:` with bash -e, so a multiline step must not pass on its last line.
+run --dir "$W/tree" --log-dir "$W/l1e" -- 'false; echo done'
+status "an early failure inside a step fails the step" 1
+has "reads as a failure" "FAIL  0/1"
+
 echo "== commands run from --dir"
 run --dir "$W/tree" --log-dir "$W/l2" -- 'test -f a.txt'
 status "the command sees the tree" 0

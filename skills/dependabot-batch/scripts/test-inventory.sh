@@ -243,6 +243,12 @@ runs(b12, dict(run(121, b12, h12, conclusion="cancelled"), event="push"),
      dict(run(122, b12, h12, created="2026-11-05T00:01:00Z"), event="pull_request"))
 jobs(121, ("JS", "cancelled", steps(("ESLint", "success"), ("Jest (unit)", "cancelled"), ("Build", "skipped"))))
 jobs(122, ("JS", "success", GREEN_JS))
+
+# #13: an npm update in a green run whose only unproved parts are conditional steps.
+b13 = "dependabot/npm_and_yarn/baz-2.0.0"
+h13 = pr(13, "chore(deps-dev): bump baz from 1.0.0 to 2.0.0", b13, [bot(meta(("baz", "2.0.0", "development", "major")))])
+runs(b13, run(131, b13, h13))
+jobs(131, ("E2E", "success", GREEN_E2E))
 PY
 
 echo "inventory.py"
@@ -311,7 +317,7 @@ has "an action in a job skipped as a whole is not proved" \
 # shellcheck disable=SC2016  # the literal ${{ }} of a workflow file
 hasnt "a matrix step matches the name the run shows" 'step "Notes on ${{ matrix.php }}"'
 has "a job a condition skipped is listed" "jobs a condition skipped as a whole: release (.github/workflows/ci.yml)"
-has "jobs a failure kept from starting are never reached" "#9 jobs never reached after the failure: test, build"
+has "jobs skipped after a failure are reported, with both possible reasons" "#9 jobs skipped after the failure (\`needs:\` on the failed job, or a condition of their own): test, build"
 hasnt "and are not read as skipped by a condition" "test (.github/workflows/ci.yml)"
 has "a red push run is not hidden by a green pull_request run" "| #10 | npm | dev | foo 1.0.0 -> 2.0.0 | major | fail |"
 has "and its failure shows" "#10 failed: JS / ESLint -> never reached: Build"
@@ -324,6 +330,16 @@ hasnt "and is not also listed as using none of them" "Upload notes (8.3)"
 has "a Babel major is a build tool major" "build tool majors, check what ships too: #11"
 has "a cancelled run beside a passing one of the same workflow is no failure" "| #12 | npm | dev | bar 1.0.0 -> 2.0.0 | major | pass |"
 hasnt "and its cancelled step is not a failure" "#12 failed"
+
+echo "== no finding, but steps CI did not run"
+WF_KEY="$(printf '%s' "api repos/o/r/actions/workflows?per_page=100" | tr -c 'A-Za-z0-9._-' '-')"
+cp "$FX/$WF_KEY" "$W/workflows.json"
+fx "api repos/o/r/actions/workflows?per_page=100" <<<'{"workflows":[{"path":".github/workflows/ci.yml","state":"active"}]}'
+run 13
+hasnt "the conditional steps below are not called nothing" "- nothing found"
+has "the line says what is not there" "- nothing tied to a bumped action or a workflow with no run"
+has "and the steps follow" "for information, conditional steps that use none of the bumped actions: Notify on failure, Upload Playwright report"
+cp "$W/workflows.json" "$FX/$WF_KEY"
 
 echo "== default selection"
 run
