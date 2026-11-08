@@ -421,6 +421,13 @@
   を明記した
 
 ### Changed
+- `dependabot-batch`: §2 の判定に「兄弟の更新待ち」を追加した。単独では毎回落ちるが、同じ系統の更新が先に入ると通る PR で、共有の依存が
+  古いままの兄弟に引き止められて二重に入っているもの。見分け方（`node_modules` のコピーを数える）と、`merge-sim.sh` の tip にその PR の
+  `package.json` の変更を当ててリベース後の状態を作る確かめ方を書いた。§6 に、そうした PR の修正は兄弟のマージと Dependabot のリベースの
+  後に push すること（先に push するとリベースが止まり、ロックファイルを手で作り直すことになる）、§7 にその PR を兄弟の後に回すことを足した。
+  背景: saai-inventory の 2026-11-08 のバッチ（#62〜#64）。`@wordpress/components` 44 の #64 は `@wordpress/private-apis` の二重化で Jest が
+  起動しなかった。data・api-fetch の major（#62・#63）の後の状態を作るとコピーは 1 つにまとまり、その先の失敗（ESM だけで配布される依存）も
+  リベースの前に見つかった。修正はリベース後に push し、マージまで手作業の衝突は出なかった（ユーザー指示）
 - `wp-org-release`（1.1.1）: 提出前チェックリスト（`references/review-checklist.md`）に「ビルド生成物（minified JS / CSS）を
   ソース抜きで zip に入れるなら、readme にリポジトリ・ビルドツール・再生成コマンド・`src -> build` の対応・バンドル内の第三者
   パッケージを書く」を追加。却下理由 9 として本文には既にあったが、チェックリストに無かったため saai-signal-mail の 1.0.0 の readme
