@@ -38,7 +38,7 @@ description: >
 | PR 本文 | PR 本文に書く項目 | 「対応フェーズ / 変更概要 / テスト内容 / 設計ドキュメントからの逸脱(あれば)」 |
 | ローカル環境 | 実装前に必要な環境(wp-env / docker compose / nvm 等) | 特に無し |
 | CI | CI の有無(「CI は無い」等の記載) | Step 0 で判定する(下の「CI・docs の無いリポジトリ」) |
-| 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `.git/dev-cycle/<ブランチ>/` |
+| 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(本文では `.git/dev-cycle/` と略す。linked worktree では `.git` がファイルなので、場所は必ずこのコマンドで解決する) |
 
 以下、「品質チェック」はこの表で決めたコマンド一式を順に実行し、すべて成功することを指す。
 「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。記録の置き場所が `docs/` の下でないときは、本文の `docs/reviews/<ブランチ>/`・
@@ -49,7 +49,8 @@ description: >
 ## CI・docs の無いリポジトリ
 
 スキル集・個人用ツールなど、GitHub Actions も `docs/` も持たないリポジトリでも同じ流れで回す。Step 0 で次の 2 つを決め、
-状態ファイルの先頭に書く(`- CI: なし` / `- 記録: .git/dev-cycle/<ブランチ>/(リポジトリに置かない)`)。
+状態ファイルの先頭に書く(`- CI: なし` / `- 記録: <git common dir の絶対パス>/dev-cycle/<ブランチ>/(リポジトリに置かない)`。
+「記録:」の行は `resume` で以後の記録ディレクトリとして読むので、略さず絶対パスで書く)。
 
 **CI の有無**: CLAUDE.md に記載があればそれに従う。無ければ、リポジトリ自身の workflow(`.github/workflows/` の下)が 0 本のとき
 「CI なし」とする。`total_count` は使わない: GitHub が自分で登録する dynamic な workflow(Copilot のコードレビューは一度動くと
@@ -165,7 +166,7 @@ review-loop / PR:
 ```markdown
 # dev-cycle 状態: feat/example-feature
 - CI: あり(CI なしなら「なし(品質チェックのみ)」)
-- 記録: docs/reviews/feat/example-feature/(または .git/dev-cycle/feat/example-feature/(リポジトリに置かない))
+- 記録: docs/reviews/feat/example-feature/(または /path/to/repo/.git/dev-cycle/feat/example-feature/(リポジトリに置かない)。絶対パスで書く)
 - タスク: <タスク概要>
 - 開始: 2026-09-06
 - PR: #12 https://github.com/<owner>/<repo>/pull/12(未作成なら「未作成」)

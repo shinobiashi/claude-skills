@@ -425,7 +425,7 @@
   「記録ディレクトリ」を決める（CLAUDE.md の記載が優先）。CI の有無はリポジトリ自身の workflow（`.github/workflows/` の下）の数で判定し、
   直近にマージされた PR に check があれば「あり」に戻す（`total_count` は使わない。Copilot のコードレビューは一度動くと dynamic な workflow として
   数に入る）。CI なしなら Step 5 を飛ばし、Step 6 と順番実行で `--wait-ci` を付けず、品質チェックを品質ゲートとして報告する。`docs/` が無ければ
-  記録（`dev-cycle.md`・`G*.md`・`final-report.md`・backlog）を `.git/dev-cycle/<ブランチ>/` に置く（追跡されず、セッションをまたいで残るので
+  記録（`dev-cycle.md`・`G*.md`・`final-report.md`・backlog）を `.git/dev-cycle/<ブランチ>/`（実体は `git rev-parse --path-format=absolute --git-common-dir` の下。linked worktree でも同じ場所）に置く（追跡されず、セッションをまたいで残るので
   `resume` が効く。baseline はブランチをまたいで使うので `.git/dev-cycle/review-baseline.md`）。記録用 `docs:` コミットはせず、最終報告と `fix` の結果は
   PR へのコメントで、backlog は PR 本文で残す（bot は `.git/` を読めない）。修正も push も無かったラウンドの後は HEAD が変わらないので、同じ HEAD への
   再依頼の直前に `T` を取り直す。`request-gate-review.sh` は、(1) 応答と数えるレビューを `T` 以降に提出されたものに絞り（同じ HEAD への再依頼で、
