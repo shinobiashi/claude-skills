@@ -27,7 +27,7 @@ Critical/High がゼロになったら APPROVE で終了**するレビュール�
 | レビュー基準 | `docs/review-criteria.md`(重大度定義・絶対ルール直行チェックリスト・指摘の記法) | 本スキルの「重大度定義」章 |
 | 設計ドキュメント | `docs/ARCHITECTURE.md`、`docs/ADR/`、`docs/DESIGN.md` 等 | CLAUDE.md 本文 |
 | ベースブランチ | PR のベースブランチ | `main` |
-| 記録の置き場所 | `R*.md`・baseline・backlog を置く場所、またはリポジトリに置かない旨 | `dev-cycle` から渡されればそれ。無ければ `docs/` があれば `docs/reviews/<ブランチ>/`(baseline・backlog は `docs/` 直下)、`docs/` が無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(backlog も同じ場所。baseline は許容済みの項目をブランチをまたいで使うので、その一つ上の `dev-cycle/review-baseline.md`) |
+| 記録の置き場所 | `R*.md`・baseline・backlog を置く場所、またはリポジトリに置かない旨 | `dev-cycle` から渡されればそれ。無ければ `docs/` があれば `docs/reviews/<ブランチ>/`(baseline・backlog は `docs/` 直下)、`docs/` が無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(backlog も同じ場所。baseline は許容済みの項目をブランチをまたいで使うので `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md`) |
 
 以下、「品質チェック」はこの表のコマンド一式を順に実行し、すべて成功することを指す。
 本文の `docs/reviews/<ブランチ名>/`・`docs/review-baseline.md`・`docs/review-backlog.md` は、記録の置き場所が別のときはそこに読み替える。

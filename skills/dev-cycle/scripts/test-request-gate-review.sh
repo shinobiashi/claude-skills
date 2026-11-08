@@ -66,6 +66,8 @@ EOS
 #   FAKE_RUNS_PENDING      number of runs calls that report the run still queued
 #   FAKE_WORKFLOWS         the repository's Actions workflows: ci (default: ci.yml and the dynamic Copilot
 #                          workflow) | dynamic (only the dynamic Copilot workflow, as in a repository with no CI)
+#                          | error (gh prints the API's error JSON and exits 1)
+#   FAKE_REVIEWS_AT        time: Copilot and Codex reviews of FAKE_HEAD exist from the start, submitted then
 #   FAKE_REVIEWS_BEFORE_T  1: Copilot and Codex reviews of FAKE_HEAD exist, submitted before T
 #                          (the previous round's reviews when a round is asked again on the same head)
 #   FAKE_HEAD_MOVES_TO     sha: from the 2nd `gh pr view` on, the PR head is this (a push during the wait)
@@ -90,6 +92,7 @@ case "$1 $2" in
 		case "${FAKE_WORKFLOWS:-ci}" in
 			ci) echo "{\"total_count\":2,\"workflows\":[{\"path\":\".github/workflows/ci.yml\",\"state\":\"active\"},$copilot]}" ;;
 			dynamic) echo "{\"total_count\":1,\"workflows\":[$copilot]}" ;;
+			error) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
 		esac
 		exit 0 ;;
 	"api repos/"*)
@@ -168,6 +171,10 @@ case "$1 $2" in
 				fi
 				if [ -n "${FAKE_COPILOT_SECOND_AFTER:-}" ] && [ "$n" -ge "$FAKE_COPILOT_SECOND_AFTER" ]; then
 					items="${items:+$items,}{\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$(now)\"}"
+				fi
+				if [ -n "${FAKE_REVIEWS_AT:-}" ]; then
+					items="${items:+$items,}{\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$FAKE_REVIEWS_AT\"}"
+					items="${items:+$items,}{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"$FAKE_REVIEWS_AT\"}"
 				fi
 				if [ "${FAKE_REVIEWS_BEFORE_T:-0}" -eq 1 ]; then
 					items="${items:+$items,}{\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"commit_id\":\"$FAKE_HEAD\",\"submitted_at\":\"2026-01-01T00:00:00Z\"}"
@@ -491,11 +498,24 @@ check "CI=none" has "^CI=none$"
 check "the missing CI is named, with what to do" has "has no GitHub Actions workflow at all: if it has no CI, request without --wait-ci"
 check "Copilot is not asked" not_called "pr edit"
 
+echo "== --wait-ci: the workflows API fails -> no claim that the repository has no CI"
+FAKE_CI=none FAKE_WORKFLOWS=error run 5 --copilot-only --wait-ci
+check "exit 3" rc_is 3
+check "an API error is not read as no workflow" hasnt "no GitHub Actions workflow at all"
+
 echo "== --ci-only: a Copilot code review run on the head is not CI"
 FAKE_RUNS=dynamic FAKE_CI=none FAKE_WORKFLOWS=dynamic run 5 --ci-only
 check "exit 3, not a pass" rc_is 3
 check "CI=none" has "^CI=none$"
 check "not reported as passed" hasnt "CI passed"
+
+echo "== reviews of the head that arrived after T but before the script started still count"
+FAKE_REVIEWS_AT=2026-01-01T00:00:10Z run 5 --wait-only --since 2026-01-01T00:00:00Z --copilot-settle 0 --timeout 40
+check "exit 0" rc_is 0
+check "COPILOT=responded" has "^COPILOT=responded$"
+check "CODEX=responded" has "^CODEX=responded$"
+FAKE_REVIEWS_AT=2026-01-01T00:00:00Z run 5 --wait-only --since 2026-01-01T00:00:00Z --copilot-settle 0 --timeout 40
+check "a review submitted in the second of T counts (inclusive)" rc_is 0
 
 echo "== the same head asked again: the previous round's reviews are no response"
 FAKE_REVIEWS_BEFORE_T=1 run 5 --wait-only --since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeout 40

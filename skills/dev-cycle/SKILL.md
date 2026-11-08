@@ -41,8 +41,9 @@ description: >
 | 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `.git/dev-cycle/<ブランチ>/` |
 
 以下、「品質チェック」はこの表で決めたコマンド一式を順に実行し、すべて成功することを指す。
-「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。本文の `docs/reviews/<ブランチ>/`・`docs/review-backlog.md` は記録ディレクトリに、
-`docs/review-baseline.md` は記録の置き場所の baseline(`.git/dev-cycle/` のときは `.git/dev-cycle/review-baseline.md`。ブランチをまたいで使う)に読み替える。
+「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。記録の置き場所が `docs/` でないときは、本文の `docs/reviews/<ブランチ>/`・
+`docs/review-backlog.md` を記録ディレクトリに、`docs/review-baseline.md` を
+`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md`(ブランチをまたいで使う)に読み替える。
 `docs/` の無いリポジトリに、記録のためだけに `docs/` を作らない(次の Step 0 が `docs/` を見つけて置き場所が変わってしまう)。
 
 ## CI・docs の無いリポジトリ
@@ -236,7 +237,8 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
   (本スキル起動により commit は許可済み)
 - R3 で APPROVE にならなかった場合は review-loop の報告をそのまま引き継いで**停止**する
   (設計レベルの問題の可能性。人間の判断)
-- 記録ディレクトリが `docs/reviews/<ブランチ>/` 以外なら、それを review-loop に渡す(`R*.md`・baseline・backlog をそこに置く)
+- 記録ディレクトリが `docs/reviews/<ブランチ>/` 以外なら、それを review-loop に渡す(`R*.md`・backlog はそこに置き、baseline は
+  `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md` を使う。ブランチをまたいで許容項目を引き継ぐため)
 
 ### Step 4. push と PR 作成
 
@@ -290,13 +292,14 @@ Step 6 の依頼の直前の CI 待ちは、`--wait-ci` で依頼とまとめる
 
 対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**の UTC 時刻 `T` を `--since` で渡す。
 
-> **`T` は必ず `scripts/gate-round.sh push` の出力から取る**(初回 push も含む。Step 4 参照)。
+> **`T` は必ず `scripts/gate-round.sh push` の出力から取る**(初回 push も含む。Step 4 参照)。例外は、push の無いラウンドの後に
+> 同じ HEAD へ再依頼するときだけ(Step 7-8「修正も push も無かったラウンドの後の `T`」)。
 > あとから `git log` で作り直そうとすると取り違えやすい——`--date=format:%Y-%m-%dT%H:%M:%SZ` は
 > **コミット自身のタイムゾーンのまま**整形して末尾に `Z` を付けるだけなので、JST のコミットは
 > 9時間先の「UTC」になる(`format-local:` でないと UTC にならない)。実際にこれで `T` が未来になり、
-> `gate-threads.sh list/status` が新規指摘を1件も返さなかったことがある。bot の応答判定自体は
-> `commit_id` で行うので `request-gate-review.sh` は正常に応答を検出し、**スレッドだけが 0 件**という
-> 気づきにくい形で出る。手で作る場合は `TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd`。
+> `gate-threads.sh list/status` が新規指摘を1件も返さなかったことがある(当時は応答の判定が `commit_id` だけだったので、
+> 応答は検出され**スレッドだけが 0 件**という気づきにくい形で出た)。いまはレビューも `T` 以降の提出だけを応答と数えるので、
+> `T` が未来だと応答も検出されず **TIMEOUT** になる。TIMEOUT が続くときは `T` を疑う。手で作る場合は `TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd`。
 
 依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
 (手書きの `gh` ループに戻さない。理由は後述):
@@ -342,8 +345,9 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   方法ごとに最大 90 秒、その後も最初の依頼から合計 5 分までは証拠を待ち(timeline の遅延と、レビュー本体の
   到着を拾う)、それでも無ければ **exit 2**。以前のように 15 分待ってから諦めない。実 PR(jp4wc-rakusync #12、
   2026-09-24)では `gh pr edit` の依頼が 0 秒で pending 一覧に現れ、2 分後にレビューが届いた
-- 応答の判定は提出時刻ではなく **review の `commit_id` が現 HEAD と一致するか**で行う(両 bot とも
-  1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある)。Codex は加えて
+- 応答の判定は **review の `commit_id` が現 HEAD と一致し、かつ `T` 以降に提出されたか**で行う(両 bot とも
+  1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある。提出時刻も見るのは、同じ HEAD へ
+  再依頼したときに前のラウンドのレビューを応答と数えないため。新しい HEAD では `T` が push の前なので影響しない)。Codex は加えて
   `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")と、PR 本文への `T` 以降の 👍
   (Codex が説明している「指摘なし」の印)も応答と見なす。**「Codex Review Summary」コメント**
   (`<!-- codex-pull-request-review-summary -->`)は応答と見なさない。PR ごとに 1 件で、Codex が動き出した時点で
@@ -357,8 +361,9 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   最初の 1 本で待ちを終えると取りこぼす(Japanized-for-WooCommerce PR #281・#282、2026-10-23。3〜4 分後)。
   追加のレビューが来たら `another Copilot review of <sha> arrived (N in all)` と出して待ち直す。Codex を待って
   いる時間もこの窓に数えるので、Codex が後から応答するラウンドでは余計にかからない。`--copilot-settle 0` で無効
-- `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
-  `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
+- `--since` を渡さないと `T` が「今」になり、CI 待ちの間や PR 作成時に届いた自動レビューが、応答としても数えられず
+  (TIMEOUT になる)、Step 7 の `gate-threads.sh list <N> <T>` でも「この push 以前」として除外される。`--wait-only` で
+  待ち直すときも同じ `T` を渡す
 - `--wait-ci` の時は依頼より前に、現 HEAD の sha の **workflow run**(`gh api repos/…/actions/runs?head_sha=`)を
   20 秒ごとに見て、すべて完了するまで待つ(最大 `--ci-timeout` 秒。既定 2,700 秒 = 15 分の CI にランナー待ちが乗っても
   足りる値)。run は push が登録された瞬間から queued として見えるので、ランナー待ちを「CI が始まっていない」と
@@ -523,9 +528,15 @@ G=<Base directory for this skill>/scripts/gate-round.sh
 待つが、**再依頼はしない**。`sequential` 時は、次にどの bot へ依頼するかを「順番実行」節で決める。
 
 **修正も push も無かったラウンドの後の `T`**: 記録用 `docs:` コミットをしない(記録をリポジトリに置かない)と、HEAD は前のラウンドの
-まま。その HEAD へ再依頼するときは、依頼の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)` を取り直し、`--since` と `gate-threads.sh`
-に渡す。古い `T` のままだと、前のラウンドのレビューを応答と数え(スクリプトは `T` より前に提出されたレビューを数えない)、
-前のラウンドで保留にしたスレッドも新規指摘として混ざる。
+まま。その HEAD へ再依頼するときは、次の順に進める。
+
+1. 前の `T` で `gate-threads.sh status <N> <前の T>` を取り直す。前のラウンドの後に遅れて届いた指摘(Copilot の 2 本目のレビュー、
+   打ち切った bot の応答)は、新しい `T` では拾えないので、ここで前のラウンドの指摘として仕分ける
+2. 依頼の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)` を取り直し、`--since` と `gate-threads.sh` に渡す。古い `T` のままだと、
+   前のラウンドのレビューを応答と数え、前のラウンドで保留にしたスレッドも新規指摘として混ざる(スクリプトは `T` より前に
+   提出されたレビューを数えないので、新しい `T` なら前のラウンドのレビューは応答にならない)
+3. Codex が push で自動レビューするリポジトリでは、同じ HEAD に Codex を起こす手段が無い(`@codex review` は接続の案内が返るだけ)。
+   そのラウンドは `--copilot-only` で依頼し、Codex は「未収束(同じ HEAD へは依頼できない)」として記録する
 
 **修正の無いラウンドでもゲートを終えない**: 新規指摘をすべて保留にして修正が無かったラウンドでも、その bot は
 未収束なので、依頼回数が 3 未満なら Step 5 へ戻って再依頼する。「コードが変わっていないので同じ指摘が返るだけ」と

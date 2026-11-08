@@ -31,10 +31,12 @@
 #   within it). Still nothing → exit 2, with the manual fallback (request
 #   in the UI, then rerun with --wait-only) spelled out on stderr.
 # - Both bots have taken well over an hour to respond at times, so the wait
-#   matches a response to the current commit by the review's `commit_id`,
-#   not by submission time — a delayed review of an *older* push landing
-#   inside this round's wait window would otherwise pass as a fresh
-#   response. Codex additionally counts as responded when it posts an issue
+#   matches a response to the current commit by the review's `commit_id`
+#   — a delayed review of an *older* push landing inside this round's wait
+#   window would otherwise pass as a fresh response — and, since a round
+#   can be asked again on the same head, by a submission at or after T.
+#   A T in the future (a hand-made one, say) therefore shows as a TIMEOUT.
+#   Codex additionally counts as responded when it posts an issue
 #   comment after T (its "Didn't find any major issues" note has no review
 #   object) or puts 👍 on the PR body after T (its documented no-findings
 #   sign).
@@ -277,7 +279,7 @@ ci_runs() {
 # ones GitHub registers by itself (Copilot code review once it has run).
 own_workflows() {
 	gh api "repos/$slug/actions/workflows?per_page=100" 2>/dev/null \
-		| jq '[.workflows[]? | select(.path | startswith(".github/workflows/"))] | length' 2>/dev/null
+		| jq 'if (.workflows | type) == "array" then [.workflows[] | select(.path | startswith(".github/workflows/"))] | length else empty end' 2>/dev/null
 }
 
 # Lists the failed runs and their failed jobs, with the rerun to use when a

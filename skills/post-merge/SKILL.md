@@ -83,7 +83,7 @@ PR の本文に残った未チェックの項目（`- [ ]`）は、「マージ�
   3. **未 push のコミットが無い**: `git log origin/<branch>..<branch>` が空（リモートを既に消していると失敗するので、その場合は
      `git log <default>..<branch>` で本流に無いコミットが無いことを確認）
 - `git worktree list` を確認し、対象ブランチに紐づく worktree があれば削除を提案 → 承認後に `git worktree remove <path>`。（`claude -w` を使っていた場合に該当）
-- `dev-cycle` が記録をリポジトリの外に置いていた場合（`docs/` の無いリポジトリ）、`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<branch>/` が残る。あれば中身（`dev-cycle.md`・`R*.md`・`G*.md` など）を示して削除を提案 → 承認後に `rm -r` で消す。一つ上の `dev-cycle/review-baseline.md` はブランチをまたいで使うので消さない。残すと、同じ名前のブランチを作り直したときに review-loop が古い `R*.md` を読む。
+- `dev-cycle` が記録をリポジトリの外に置いていた場合（`docs/` の無いリポジトリ）、`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<branch>/` が残る。あれば中身（`dev-cycle.md`・`R*.md`・`G*.md` など）を示して削除を提案 → 承認後に `rm -r` で消す。`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md` はブランチをまたいで使うので消さない。残すと、同じ名前のブランチを作り直したときに review-loop が古い `R*.md` を読む。
 - 追跡ブランチの掃除として `git fetch --prune` を提案。
 - **リモートブランチは GitHub の「マージ時にブランチを自動削除」で既に消えていることが多い**。`git push origin --delete` の前に
   `git ls-remote --heads origin <branch>` で存在を確認し、無ければ削除を試みない（試すと "remote ref does not exist" で失敗する。無害だが紛らわしい）。
