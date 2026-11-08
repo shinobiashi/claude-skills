@@ -63,6 +63,7 @@ EOS
 #                          (FAKE_RUNS_PENDING+1)th call on: none (default: no run, so `gh pr checks`
 #                          decides) | pass (one success, one skipped) | fail (one failure, run 77)
 #   FAKE_RUNS_PENDING      number of runs calls that report the run still queued
+#   FAKE_WORKFLOWS         the repository's Actions workflow count (`gh api .../actions/workflows`, default 1)
 #   FAKE_HEAD_MOVES_TO     sha: from the 2nd `gh pr view` on, the PR head is this (a push during the wait)
 cat > "$W/bin/gh" <<'EOS'
 #!/usr/bin/env bash
@@ -78,6 +79,10 @@ case "$1 $2" in
 		case "$*" in *mergeable*) echo "${FAKE_MERGEABLE:-MERGEABLE}"; exit 0 ;; esac
 		n="$(count prview)"
 		if [ -n "${FAKE_HEAD_MOVES_TO:-}" ] && [ "$n" -ge 2 ]; then echo "$FAKE_HEAD_MOVES_TO"; else echo "$FAKE_HEAD"; fi
+		exit 0 ;;
+	"api repos/"*/actions/workflows*)
+		log "$1 $2"
+		echo "${FAKE_WORKFLOWS:-1}"
 		exit 0 ;;
 	"api repos/"*)
 		log "$1 $2"
@@ -464,6 +469,14 @@ check "reported as neither run nor check" has "no workflow run and no check appe
 check "gave up after the 180s appear budget (9 x 20s)" call_count "sleep 20" 9
 check "Copilot is not asked" not_called "pr edit"
 check "no conflict is claimed" hasnt "conflicts with its base"
+check "a repository with workflows is not called CI-less" hasnt "no GitHub Actions workflow at all"
+
+echo "== --wait-ci: no check, and the repository has no workflow at all -> exit 3, saying so"
+FAKE_CI=none FAKE_WORKFLOWS=0 run 5 --copilot-only --wait-ci
+check "exit 3" rc_is 3
+check "CI=none" has "^CI=none$"
+check "the missing CI is named, with what to do" has "has no GitHub Actions workflow at all: if it has no CI, request without --wait-ci"
+check "Copilot is not asked" not_called "pr edit"
 
 echo "== --ci-only: no run because the PR conflicts -> the conflict is named"
 FAKE_CI=none FAKE_MERGEABLE=CONFLICTING run 5 --ci-only

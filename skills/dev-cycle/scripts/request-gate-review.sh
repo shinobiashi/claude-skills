@@ -105,7 +105,8 @@
 #                 `gh run rerun <id> --failed` to use when a job died in
 #                 setup (runner, network, image build) rather than in the
 #                 code. Exit 3 when CI failed, when no run and no check
-#                 appeared within 180s, when the PR head changed during the
+#                 appeared within 180s (saying so when the repository has no
+#                 Actions workflow at all: drop the wait there), when the PR head changed during the
 #                 wait, or when CI was still running after --ci-timeout
 #                 (default 2700s = 45 min: a 15-minute pipeline plus a runner
 #                 backlog; giving --ci-timeout implies --wait-ci). Size the
@@ -353,6 +354,9 @@ wait_for_ci() {
 			# GitHub starts no pull_request workflow on a PR that conflicts with its base.
 			if [ "$(gh pr view "$pr" --json mergeable --jq '.mergeable' 2>/dev/null)" = CONFLICTING ]; then
 				echo "request-gate-review: PR #$pr conflicts with its base, and GitHub runs no pull_request workflow until that is resolved: merge the base into the branch and push" >&2
+			# A repository with no CI at all has nothing to wait for: say so, so the next call drops the wait.
+			elif [ "$(gh api "repos/$slug/actions/workflows" --jq '.total_count' 2>/dev/null)" = 0 ]; then
+				echo "request-gate-review: $slug has no GitHub Actions workflow at all: if it has no CI, request without --wait-ci / --ci-only (dev-cycle skips Step 5 for a repository without CI)" >&2
 			fi
 			return 1
 		fi

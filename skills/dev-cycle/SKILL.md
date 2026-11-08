@@ -37,8 +37,38 @@ description: >
 | レビュー基準 | `docs/review-criteria.md` | `review-loop` スキルの重大度定義 |
 | PR 本文 | PR 本文に書く項目 | 「対応フェーズ / 変更概要 / テスト内容 / 設計ドキュメントからの逸脱(あれば)」 |
 | ローカル環境 | 実装前に必要な環境(wp-env / docker compose / nvm 等) | 特に無し |
+| CI | CI の有無(「CI は無い」等の記載) | Step 0 で判定する(下の「CI・docs の無いリポジトリ」) |
+| 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `.git/dev-cycle/<ブランチ>/` |
 
 以下、「品質チェック」はこの表で決めたコマンド一式を順に実行し、すべて成功することを指す。
+「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。
+
+## CI・docs の無いリポジトリ
+
+スキル集・個人用ツールなど、GitHub Actions も `docs/` も持たないリポジトリでも同じ流れで回す。Step 0 で次の 2 つを決め、
+状態ファイルの先頭に書く(`- CI: なし` / `- 記録: .git/dev-cycle/<ブランチ>/(リポジトリに置かない)`)。
+
+**CI の有無**: CLAUDE.md に記載があればそれに従う。無ければ
+`gh api "repos/{owner}/{repo}/actions/workflows" --jq .total_count` が 0 のとき「CI なし」とする。ただし Actions 以外の
+CI は check として出るので、直近にマージされた PR があれば `gh pr checks <N>` も見て、check が 1 件でもあれば「CI あり」に
+戻す。迷ったら「CI あり」として進め、Step 5 の `CI=none` で判断する(スクリプトは workflow が 1 本も無いことも伝える)。
+
+**記録ディレクトリ**: CLAUDE.md に指定があればそれ、無ければ `docs/` の有無で決める。`docs/` が無いときは
+`D="$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>"` に作る。
+
+| ステップ | CI なし | 記録をリポジトリに置かない |
+|---|---|---|
+| Step 0・2 | 品質チェックがそのまま品質ゲートになる。CLAUDE.md に無ければ、テスト・lint を探して計画で示す | 状態ファイルを記録ディレクトリに作る |
+| Step 3 | — | review-loop に記録ディレクトリを渡す(baseline・backlog も同じ場所) |
+| Step 4 | — | PR 本文に review-loop のサマリと、backlog に送った指摘(「今回は直さない指摘」)を書く。`R*.md` への参照は書かない |
+| Step 5 | 飛ばす(待つ CI が無い) | — |
+| Step 6 | `--wait-ci` を付けない | — |
+| Step 7 | CI の結果の代わりに、品質チェックの結果をラウンド報告とサマリコメントに書く | `G<n>.md` は記録ディレクトリに書く。記録用 `docs:` コミットはしないので、次の依頼の `T` は修正の push の `T` |
+| Step 8 | 最終報告の「CI」の行は「なし(品質チェックのみ)」 | `final-report.md` を記録ディレクトリに書き、同じ内容を PR に 1 件のコメントとして投稿する(コミットの代わり) |
+
+`.git/dev-cycle/` は共通の git ディレクトリの下なので、worktree からも同じ場所になる。追跡されず、セッションをまたいでも
+残るので `resume` に使える。scratchpad はセッションごとに消えるので記録ディレクトリにしない。Codex・Copilot は
+`.git/` を読めないので、重複指摘を避けるための情報(保留の理由・backlog)は PR 本文とラウンドのコメントに書く。
 
 ## 引数
 
@@ -63,6 +93,7 @@ description: >
 
 - Step 2 の実装コミット、Step 3 の review-loop 内コミット、Step 4 の初回 push と PR 作成
 - Step 7 で**確認ゲートを通過した後**の commit/push、および Step 7・8 の記録用 `docs:` コミット
+  (記録をリポジトリに置かない場合は、その代わりの Step 8 の最終報告コメントと、自分が作った PR の本文の更新)
 
 逆に、以下は起動をもってしても許可されない(「絶対にしないこと」参照)。上記に列挙されていない
 commit/push/PR 操作が必要になった場合は、勝手に行わず AskUserQuestion で確認する。
@@ -114,7 +145,7 @@ review-loop / PR:
 
 ## 状態ファイルとレジューム
 
-`docs/reviews/<ブランチ名>/dev-cycle.md` に進行状況を記録し、各ステップ完了時に更新する。
+記録ディレクトリの `dev-cycle.md`(既定 `docs/reviews/<ブランチ名>/dev-cycle.md`)に進行状況を記録し、各ステップ完了時に更新する。
 `resume` 指定時、または引数なしで feat ブランチ上で起動された時はこのファイルを読んで再開する。
 ファイルが無い feat ブランチ上で起動された場合は「このブランチで dev-cycle を始めるか」を確認する。
 
@@ -153,6 +184,8 @@ git status --short && git branch --show-current
   いなければ起動する。失敗したら停止して報告
 - CLAUDE.md がモデル運用(例: opusplan = plan mode は Opus、実行は Sonnet)を指定しており、現在の
   モデルがそれに沿っていない場合は1行で伝え、続行してよいか確認する
+- **CI の有無と記録ディレクトリを決める**(「CI・docs の無いリポジトリ」)。`resume` / `fix` のときは、まず記録ディレクトリの
+  候補(`docs/reviews/<ブランチ>/` と `.git/dev-cycle/<ブランチ>/`)の両方で状態ファイルを探す
 - 引数と現在ブランチから「新規 / resume / fix」を判定する
 
 ### Step 1. 計画(ゲート: 計画承認)
@@ -171,7 +204,7 @@ git switch main && git pull
 git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: feat/<slug>)
 ```
 
-1. 状態ファイル `docs/reviews/<ブランチ>/dev-cycle.md` を作成する
+1. 状態ファイル `<記録ディレクトリ>/dev-cycle.md` を作成する(先頭に CI の有無と記録の置き場所を書く)
 2. 承認された計画どおりに実装する。計画外の変更が必要になったら「人間に確認する条件」に従い停止する
 3. 品質チェックを green にする(2回の修正で無理なら停止)
 4. 論理単位ごとに commit する(Conventional Commits・英語・`git add <path>` で明示的に追加。
@@ -186,11 +219,12 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
   (本スキル起動により commit は許可済み)
 - R3 で APPROVE にならなかった場合は review-loop の報告をそのまま引き継いで**停止**する
   (設計レベルの問題の可能性。人間の判断)
+- 記録ディレクトリが `docs/reviews/<ブランチ>/` 以外なら、それを review-loop に渡す(`R*.md`・baseline・backlog をそこに置く)
 
 ### Step 4. push と PR 作成
 
 `start-task` の規約に従う。issue を作成するかは CLAUDE.md の運用に従う(指定が無ければ作成しない)。
-レビュー bot の起動もここでは行わない(CI 通過後に Step 6 で行う)。
+レビュー bot の起動もここでは行わない(CI 通過後に Step 6 で行う。CI なしなら push の直後でよい)。
 
 ```bash
 G=<Base directory for this skill>/scripts/gate-round.sh
@@ -203,10 +237,14 @@ Step 6 の `--since` に渡す値はすべてこの出力から取る(Step 6 の
 
 PR 本文(日本語)は「プロジェクト設定の読み取り」で決めた項目(既定: 「対応フェーズ / 変更概要 /
 テスト内容 / 設計ドキュメントからの逸脱(あれば)」)に、review-loop のサマリ(ラウンド数・修正数・
-backlog 数と `docs/reviews/<ブランチ>/R*.md` への参照)を加える。末尾にシステムプロンプト指定の
+backlog 数と `docs/reviews/<ブランチ>/R*.md` への参照)を加える。記録をリポジトリに置かない場合は参照の代わりに、
+backlog に送った指摘を「今回は直さない指摘」として本文に並べる(bot は `.git/` の記録を読めない)。末尾にシステムプロンプト指定の
 署名を付ける。PR 番号と URL を状態ファイルに記録する。
 
 ### Step 5. CI 待ち
+
+**CI なしのリポジトリでは、このステップを飛ばす**(Step 6 も `--wait-ci` を付けない)。品質チェックの green が
+品質ゲートで、ラウンド報告・サマリコメント・最終報告には CI の代わりにその結果を書く。
 
 依頼しない CI 待ち(最終ラウンドの修正の後、Step 8 の記録用 `docs:` コミットの後)は、本スキル同梱の
 `scripts/request-gate-review.sh` の `--ci-only` で待つ。Bash `run_in_background`(前面の `sleep` は使えない。完了時に1回通知が来る)、
@@ -348,7 +386,7 @@ TIMEOUT(exit 1)なら「人間に確認する条件」(`--wait-only` で待ち�
 
 ### Step 7. ゲートラウンド G<n>(ゲート: 確認ゲート)
 
-ラウンド番号 n は Step 6 の依頼回数(両 bot 共通。`sequential` 時は通しのターン番号)。記録は `docs/reviews/<ブランチ>/G<n>.md`。
+ラウンド番号 n は Step 6 の依頼回数(両 bot 共通。`sequential` 時は通しのターン番号)。記録は `<記録ディレクトリ>/G<n>.md`。
 
 **1. 未解決スレッドと Copilot レビュー本文の取得**(REST は resolved 状態を返さないため GraphQL。
 `fix-copilot-review` スキル同梱の `gate-threads.sh` が問い合わせ・返信・Resolve をまとめて持っているので
@@ -419,7 +457,8 @@ git push origin <ブランチ>
 ```
 
 論理的に独立した修正はコミットを分ける。push 後に `G<n>.md`(下記フォーマット)と状態ファイルを
-更新し、`docs: record dev-cycle gate round <n>` として commit・push する。
+更新し、`docs: record dev-cycle gate round <n>` として commit・push する。記録をリポジトリに置かない場合は、
+更新するだけでコミットしない(次の依頼の `T` は修正の push の `T`)。
 
 `gate-round.sh publish` は PR の head が push に追いつくのを最長 60 秒待つので、push の直後に続けて実行してよい
 (以前は GitHub 側の数秒の遅れで「local HEAD is not the PR head」と拒まれていた)。
@@ -494,8 +533,10 @@ Codex はそこで初めて指摘 0 件 = 収束になった)。再依頼せず�
 
 ### Step 8. 最終報告と停止
 
-1. `docs/reviews/<ブランチ>/final-report.md` に下記「最終報告」を書き、状態ファイルを「完了」に更新し、
-   `docs: record dev-cycle final report` として commit・push する
+1. `<記録ディレクトリ>/final-report.md` に下記「最終報告」を書き、状態ファイルを「完了」に更新し、
+   `docs: record dev-cycle final report` として commit・push する。記録をリポジトリに置かない場合はコミットせず、
+   同じ内容を `gh pr comment <N> --body-file <final-report.md>` で PR に 1 件投稿する(PR 本文の件数・状態も古ければ
+   `gh pr edit <N> --body-file` で直す)
 2. 同じ内容をユーザーに報告して**停止**する。マージはしない
 
 ### `fix <ID>...`(最終報告後の人間判断による修正)
@@ -579,7 +620,7 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 ### 修正しなかった指摘(PR 上で未解決のまま残してある)
 | ID | bot | 重大度 | 理由 | スレッド |
 ## 品質ゲート
-- CI: <run url> green / 品質チェック: green(PHPUnit <n> 件)
+- CI: <run url> green(CI なしなら「なし」)/ 品質チェック: green(PHPUnit <n> 件)
 ## 次にできること(人間の判断)
 - 保留分の修正: `/dev-cycle fix G1-2 G2-1` または `/fix-copilot-review <N>`
 - 状態が「未確認」の bot があれば: 数時間後(別セッションでもよい)に `/fix-copilot-review <N>`
@@ -596,4 +637,5 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 - 実装は計画ドキュメントのフェーズ順・推奨順に従い、フェーズを跨いだ先回り実装をしない
 - 修正は指摘の趣旨に対する最小限にとどめ、不要なファイル変更をしない
 - `docs/review-baseline.md` / `docs/review-backlog.md` / `docs/reviews/<ブランチ>/R*.md` は
-  Codex / Copilot が重複指摘を避けるために読むため、各ラウンドで最新に保つ
+  Codex / Copilot が重複指摘を避けるために読むため、各ラウンドで最新に保つ。記録をリポジトリに置かない場合、
+  bot はそれを読めないので、保留の理由はスレッドの返信とラウンドのサマリコメントに、backlog は PR 本文に書く

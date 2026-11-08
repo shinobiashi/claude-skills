@@ -421,6 +421,15 @@
   を明記した
 
 ### Changed
+- `dev-cycle`: GitHub Actions も `docs/` も無いリポジトリ（スキル集・個人用ツール）でも同じ流れで回せるようにした。Step 0 で「CI の有無」
+  （CLAUDE.md の記載、無ければ workflow の数と直近の PR の check）と「記録ディレクトリ」を決める。CI なしなら Step 5 を飛ばし、Step 6 で
+  `--wait-ci` を付けず、品質チェックを品質ゲートとして報告する。`docs/` が無ければ記録（`dev-cycle.md`・`G*.md`・`final-report.md`）を
+  `.git/dev-cycle/<ブランチ>/` に置く（追跡されず、セッションをまたいで残るので `resume` が効く。scratchpad は消える）。記録用 `docs:` コミットは
+  しない。最終報告は PR へのコメントで残し、backlog は PR 本文に並べる（bot は `.git/` を読めない）。`request-gate-review.sh` は、`CI=none` で
+  止まったときにリポジトリに workflow が 1 本も無ければそう伝え、`--wait-ci` を外すよう案内する（テスト 191 件、追加分は修正前のスクリプトで落ちる）。
+  背景: claude-skills PR #2 で、CI 待ちを飛ばすことと記録を scratchpad に置くことを毎回手で判断した（ユーザー指示）
+- `review-loop`: 記録の置き場所を「プロジェクト設定の読み取り」に足した。`dev-cycle` から渡された場所、無ければ `docs/` の有無で
+  `docs/reviews/<ブランチ>/` か `.git/dev-cycle/<ブランチ>/` を使う。`docs/` の無いリポジトリに記録のためだけに `docs/` を作らない
 - `dependabot-batch`: §2 の判定に「兄弟の更新待ち」を追加した。単独では毎回落ちるが、同じ系統の更新が先に入ると通る PR で、共有の依存が
   古いままの兄弟に引き止められて二重に入っているもの。見分け方（`node_modules` のコピーを数える）と、`merge-sim.sh` の tip にその PR の
   `package.json` の変更を当ててリベース後の状態を作る確かめ方を書いた。§6 に、そうした PR の修正は兄弟のマージと Dependabot のリベースの
