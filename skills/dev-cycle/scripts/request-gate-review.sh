@@ -264,10 +264,20 @@ CI_APPEAR=180
 CI_OK='($c == "success" or $c == "skipped" or $c == "neutral")'
 
 # The workflow runs of the head sha as a JSON array of {id, name, status,
-# conclusion}; `[]` when there are none or gh cannot answer.
+# conclusion}; `[]` when there are none or gh cannot answer. Dynamic runs
+# (event "dynamic": Copilot code review, Dependabot, Pages) are GitHub's own
+# jobs, not the repository's CI: a Copilot review of the head would read as
+# a green CI in a repository that has none.
 ci_runs() {
 	gh api "repos/$slug/actions/runs?head_sha=$head_sha&per_page=50" 2>/dev/null \
-		| jq -c '[.workflow_runs[]? | {id, name, status, conclusion}]' 2>/dev/null || echo '[]'
+		| jq -c '[.workflow_runs[]? | select(.event != "dynamic") | {id, name, status, conclusion}]' 2>/dev/null || echo '[]'
+}
+
+# The repository's own workflows (.github/workflows/), leaving out the dynamic
+# ones GitHub registers by itself (Copilot code review once it has run).
+own_workflows() {
+	gh api "repos/$slug/actions/workflows?per_page=100" 2>/dev/null \
+		| jq '[.workflows[]? | select(.path | startswith(".github/workflows/"))] | length' 2>/dev/null
 }
 
 # Lists the failed runs and their failed jobs, with the rerun to use when a
@@ -355,7 +365,7 @@ wait_for_ci() {
 			if [ "$(gh pr view "$pr" --json mergeable --jq '.mergeable' 2>/dev/null)" = CONFLICTING ]; then
 				echo "request-gate-review: PR #$pr conflicts with its base, and GitHub runs no pull_request workflow until that is resolved: merge the base into the branch and push" >&2
 			# A repository with no CI at all has nothing to wait for: say so, so the next call drops the wait.
-			elif [ "$(gh api "repos/$slug/actions/workflows" --jq '.total_count' 2>/dev/null)" = 0 ]; then
+			elif [ "$(own_workflows)" = 0 ]; then
 				echo "request-gate-review: $slug has no GitHub Actions workflow at all: if it has no CI, request without --wait-ci / --ci-only (dev-cycle skips Step 5 for a repository without CI)" >&2
 			fi
 			return 1
@@ -677,19 +687,24 @@ deadline=$((SECONDS + timeout))
 while :; do
 	c=-
 	x=-
-	# Match by commit_id, not by submission time: a bot's review of an
+	# Match by commit_id, not by submission time alone: a bot's review of an
 	# *older* push can land inside this round's wait window (Copilot and
 	# Codex have both taken well over an hour to respond at times), and a
 	# time-only check would mistake that stale review for a response to
-	# the current commit. Codex's no-findings note is an issue comment with
-	# no commit, and its 👍 a reaction, so both are matched by time (T,
+	# the current commit. The review must also be submitted at or after T:
+	# a round asked again on the same head (nothing to push, and no record
+	# commit in a repository that keeps its records out of git) passes a
+	# fresh T, and the previous round's review of that head is not a
+	# response. On a new head this changes nothing, since T is taken before
+	# the push that created it. Codex's no-findings note is an issue comment
+	# with no commit, and its 👍 a reaction, so both are matched by time (T,
 	# inclusive) instead. The summary comment is left out (see header).
 	if [ "$want_copilot" -eq 1 ]; then
-		c="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(((.user // {}) | $COPILOT) and .commit_id == \"$head_sha\")] | length")"
+		c="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(((.user // {}) | $COPILOT) and .commit_id == \"$head_sha\" and (.submitted_at // \"\") >= \"$T\")] | length")"
 	fi
 	summary_note=""
 	if [ "$want_codex" -eq 1 ]; then
-		xr="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .commit_id == \"$head_sha\")] | length")"
+		xr="$(probe_count "repos/$slug/pulls/$pr/reviews" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .commit_id == \"$head_sha\" and (.submitted_at // \"\") >= \"$T\")] | length")"
 		xc="$(probe_count "repos/$slug/issues/$pr/comments" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .created_at >= \"$T\" and ((.body // \"\") | contains(\"$CODEX_SUMMARY_MARK\") | not))] | length")"
 		xt="$(probe_count "repos/$slug/issues/$pr/reactions" "[.[] | select(.user.login == \"$CODEX_LOGIN\" and .content == \"+1\" and .created_at >= \"$T\")] | length")"
 		x=$((xr + xc + xt))

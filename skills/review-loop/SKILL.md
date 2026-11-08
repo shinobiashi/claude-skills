@@ -27,13 +27,14 @@ Critical/High がゼロになったら APPROVE で終了**するレビュール�
 | レビュー基準 | `docs/review-criteria.md`(重大度定義・絶対ルール直行チェックリスト・指摘の記法) | 本スキルの「重大度定義」章 |
 | 設計ドキュメント | `docs/ARCHITECTURE.md`、`docs/ADR/`、`docs/DESIGN.md` 等 | CLAUDE.md 本文 |
 | ベースブランチ | PR のベースブランチ | `main` |
-| 記録の置き場所 | `R*.md`・baseline・backlog を置く場所、またはリポジトリに置かない旨 | `dev-cycle` から渡されればそれ。無ければ `docs/` があれば `docs/reviews/<ブランチ>/`(baseline・backlog は `docs/` 直下)、`docs/` が無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(baseline・backlog も同じ場所) |
+| 記録の置き場所 | `R*.md`・baseline・backlog を置く場所、またはリポジトリに置かない旨 | `dev-cycle` から渡されればそれ。無ければ `docs/` があれば `docs/reviews/<ブランチ>/`(baseline・backlog は `docs/` 直下)、`docs/` が無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(backlog も同じ場所。baseline は許容済みの項目をブランチをまたいで使うので、その一つ上の `dev-cycle/review-baseline.md`) |
 
 以下、「品質チェック」はこの表のコマンド一式を順に実行し、すべて成功することを指す。
 本文の `docs/reviews/<ブランチ名>/`・`docs/review-baseline.md`・`docs/review-backlog.md` は、記録の置き場所が別のときはそこに読み替える。
 `docs/` の無いリポジトリに、記録のためだけに `docs/` を作らない(スキル集・個人用ツールでは不要な変更になる)。`.git/` の下は
-追跡されずセッションをまたいで残るので、ラウンドの自動判定もそのまま働く。Codex・Copilot はそこを読めないので、backlog に送った指摘は
-PR 本文(`start-task` / `dev-cycle` が書く)に並べる。
+追跡されずセッションをまたいで残るので、ラウンドの自動判定もそのまま働く(linked worktree では `.git` がファイルなので、場所は必ず
+`git rev-parse --path-format=absolute --git-common-dir` で解決する)。Codex・Copilot はそこを読めないので、backlog に送った指摘は
+PR 本文に並べる(`dev-cycle` は Step 4 で書く。`start-task` で PR を作るときは、本文に「今回は直さない指摘」の節を足す)。
 
 ## 前提: commit / push の扱い
 
