@@ -22,7 +22,7 @@
   衝突し（実際に衝突した 3 本）、推奨順なら手作業が無く、squash だと #54 が衝突することを出す。`rules-diff.py` は Dependabot の生のコミット `a183ef2` で
   `.eslintrc.js` が読まれていないこと・text domain の `allowedTextDomain` が消えたこと・Jest が無いことを出し、修正後の `1022f71` ではそれらが消える。
   PHPCS は #49 で 307 → 308、減った sniff は 0（当時の結果と同じ）。`run-steps.sh` は `a183ef2` で CI が届かなかった `test:unit` の失敗も出す。
-  シナリオテスト 325 件（`scripts/test-*.sh`。ネットワーク不要）。主要な 10 の振る舞いは、壊すと名指しのテストが落ちることを確かめた。
+  シナリオテスト 329 件（`scripts/test-*.sh`。ネットワーク不要）。主要な 10 の振る舞いは、壊すと名指しのテストが落ちることを確かめた。
   文脈を持たない別のエージェントに、#59・#60 で手順を読み通してもらい（GitHub への書き込みなし）、出た問題を直した: 依存を入れ忘れた `SKIPPED` が exit 0 だった
   （設定ファイルがあるのにツールが無ければ `FAILED`）、E2E ヘルパーの major を確かめる経路が無かった（`major (test env)` と Playwright のプローブ）、§8 の tip が
   番号順を指していた、PR 本文の changelog が途中で切れて間の major が見えない、ビルド出力の丸ごとの比較が無かった、など。
@@ -35,7 +35,8 @@
   無視して同梱の設定を比べる、同じ concurrency グループで取り消された run を赤と数える、などを直した。追加したテストは、修正前のスクリプトでは
   すべて落ちることを確かめた。PR のレビュー（Copilot・Codex）では、Jest・Playwright の設定を base だけで決めていた、複数行のステップを
   `bash -e` なしで流して途中の失敗が PASS になる、lint のスクリプトが渡す `--config` を読まずに既定の設定を比べる、素の `jest` で
-  `jest-unit.config.js` を優先する、などを直した。
+  `jest-unit.config.js` を優先する、`tsc -p` で渡す project を読まない、同じ名前のステップが別のジョブで動くと Action を「動いた」と
+  判定する、などを直した。
   背景: saai-inventory の 2026-11-05 のバッチ（ユーザー指示）
 - `wc-am-internal-license`: 新規。WooCommerce API Manager のクライアント（wc-am-client.php 2.x）を同梱する自社の有料プラグインに、
   社内ライセンスの mu-plugin を生成する。wp-config.php の定数の社内用アカウントのユーザーライセンスキー（API Manager 3.8 からの

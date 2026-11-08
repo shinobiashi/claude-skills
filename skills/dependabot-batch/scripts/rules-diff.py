@@ -126,9 +126,12 @@ def wp_scripts_runs(tree, command):
 
 JEST_COMMANDS = (r"wp-scripts test-unit-js", r"(?<![\w@/.-])jest(?![\w.-])")
 PLAYWRIGHT_COMMANDS = (r"wp-scripts test-playwright", r"(?<![\w@/.-])playwright test")
+TSC_COMMANDS = (r"(?<![\w@/.-])tsc(?![\w.-])",)
+CONFIG_FLAGS = r"--config[=\s]|\s-c\s"
+PROJECT_FLAGS = r"--project[=\s]|\s-p\s"
 
 
-def script_configs(tree, commands):
+def script_configs(tree, commands, flags=CONFIG_FLAGS):
     """What package.json scripts hand to one of these commands: the path after --config / -c,
     or None for a script that runs it without one. Only flags after the command count, so the
     -c of a wrapper (concurrently, dotenv) is not taken for the tool's."""
@@ -138,18 +141,18 @@ def script_configs(tree, commands):
             starts = [m.start() for m in (re.search(c, segment) for c in commands) if m]
             if not starts:
                 continue
-            match = re.search(r"(?:--config[=\s]|\s-c\s)\s*(['\"]?)([^\s'\"]+)\1", segment[min(starts):])
+            match = re.search(rf"(?:{flags})\s*(['\"]?)([^\s'\"]+)\1", segment[min(starts):])
             config = match.group(2) if match else None
             if config not in found:
                 found.append(config)
     return found
 
 
-def script_config(tree, subject, commands, option):
+def script_config(tree, subject, commands, option, flags=CONFIG_FLAGS):
     """(config or None, failure or None). With a --config in a script, wp-scripts runs it instead
     of its bundled config, so that is what to compare. Two suites with other configs (a unit and an
     e2e script) cannot be told apart here: comparing the wrong one would read as SAME."""
-    found = script_configs(tree, commands)
+    found = script_configs(tree, commands, flags)
     passed = [config for config in found if config]
     if len(found) > 1 and passed:
         listed = ", ".join(config or "its default config" for config in found)
@@ -357,8 +360,8 @@ def probe_stylelint(base, head, explicit, full):
     return probe_config("stylelint", base, head, samples, binary, bundled, "lint-style", full, stylelint_normalizer)
 
 
-def tsc_config(tree):
-    code, out, err = run([tool_path(tree, "node_modules/.bin/tsc"), "--showConfig"], tree)
+def tsc_config(tree, project):
+    code, out, err = run([tool_path(tree, "node_modules/.bin/tsc"), "--showConfig", *(["-p", project] if project else [])], tree)
     if code != 0:
         return None, first_error(out, err)
     try:
@@ -368,15 +371,29 @@ def tsc_config(tree):
 
 
 def probe_tsc(base, head, full):
-    if not tool_path(base, "tsconfig.json"):
-        return [result("tsconfig", "skipped", ["no tsconfig.json"])]
-    missing = missing_tool("tsconfig", base, head, "node_modules/.bin/tsc", ("tsconfig.json",))
+    # The project the check script names (tsc -p tsconfig.ci.json) is what CI type-checks, in
+    # each tree: a PR can point the script at another project.
+    projects, errors = {}, []
+    for side, tree in (("base", base), ("head", head)):
+        project, failure = script_config(tree, "tsconfig", TSC_COMMANDS, None, PROJECT_FLAGS)
+        projects[tree] = project
+        if failure:
+            errors.append(f"{side}: {failure['lines'][0]}")
+    if errors:
+        return [result("tsconfig", "failed", errors)]
+    old_project, new_project = projects[base], projects[head]
+    subject = "tsconfig" if not (old_project or new_project) else (
+        f"tsconfig ({old_project or 'tsconfig.json'})" if old_project == new_project
+        else f"tsconfig (base {old_project or 'tsconfig.json'}, head {new_project or 'tsconfig.json'})")
+    if not old_project and not tool_path(base, "tsconfig.json"):
+        return [result("tsconfig", "skipped", ["no tsconfig.json, and no script passes tsc a project"])]
+    missing = missing_tool(subject, base, head, "node_modules/.bin/tsc", ("tsconfig.json",))
     if missing:
         return missing
-    old, old_err = tsc_config(base)
-    new, new_err = tsc_config(head)
+    old, old_err = tsc_config(base, old_project)
+    new, new_err = tsc_config(head, new_project)
     if old_err or new_err:
-        return [result("tsconfig", "failed", [f"{s}: {e}" for s, e in (("base", old_err), ("head", new_err)) if e])]
+        return [result(subject, "failed", [f"{s}: {e}" for s, e in (("base", old_err), ("head", new_err)) if e])]
     old_opts, new_opts = old.get("compilerOptions", {}), new.get("compilerOptions", {})
     changed = sorted(k for k in set(old_opts) | set(new_opts) if old_opts.get(k) != new_opts.get(k))
     lines = [f"{k}: {old_opts.get(k)} -> {new_opts.get(k)}" for k in changed]
@@ -387,7 +404,7 @@ def probe_tsc(base, head, full):
     if old_files != new_files:
         lines.append(f"files: {old_files} -> {new_files}")
     status = "lost" if new_files < old_files or weakened else ("changed" if lines else "same")
-    return [result("tsconfig", status, lines, {"changed": changed, "weakened": weakened})]
+    return [result(subject, status, lines, {"changed": changed, "weakened": weakened})]
 
 
 def tsc_checks_on(options):

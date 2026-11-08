@@ -305,6 +305,33 @@ def enclosing_step_name(lines, index):
     return None
 
 
+def enclosing_job(lines, index):
+    """The job around a line: what the run calls it (its `name:`, else its id), or None. Job keys
+    are the first indented level under `jobs:`."""
+    jobs_at = next((i for i in range(index, -1, -1) if re.match(r"jobs:\s*(#.*)?$", lines[i])), None)
+    if jobs_at is None:
+        return None
+    child = next((line for line in lines[jobs_at + 1:index + 1] if line.strip() and not line.lstrip().startswith("#")), None)
+    if child is None:
+        return None
+    key_indent = len(child) - len(child.lstrip())
+    key_at = next((i for i in range(index, jobs_at, -1)
+                   if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) == key_indent), None)
+    if key_at is None:
+        return None
+    job_id = lines[key_at].strip().rstrip(":").strip("\"'")
+    body = [line for line in lines[key_at + 1:] if line.strip() and not line.lstrip().startswith("#")]
+    child_indent = len(body[0]) - len(body[0].lstrip()) if body else None
+    for line in body:
+        indent = len(line) - len(line.lstrip())
+        if indent <= key_indent:
+            break
+        found = re.match(r"\s*name:\s*(.+)$", line)
+        if found and indent == child_indent:
+            return found.group(1).split(" #")[0].strip().strip("\"'")
+    return job_id
+
+
 def action_coverage(repo, pr):
     """For an action bump: did the step that uses it run at all on this head?"""
     if pr["ecosystem"] != "actions":
@@ -321,8 +348,9 @@ def action_coverage(repo, pr):
                 if not used:
                     continue
                 name = enclosing_step_name(lines, index) or f"Run {update['name']}@{used.group(1).strip(chr(39) + chr(34))}"
-                coverage.append({"action": update["name"], "path": path, "step": name,
-                                 "state": step_state(pr["ci"], path, name)})
+                job = enclosing_job(lines, index)
+                coverage.append({"action": update["name"], "path": path, "step": name, "job": job,
+                                 "state": step_state(pr["ci"], path, name, job)})
     return coverage
 
 
@@ -337,12 +365,24 @@ def step_matcher(name):
     return lambda shown: bool(pattern.match(shown))
 
 
-def step_state(ci, path, name):
-    """The step counts as run only when the run shows it running. A step in a job skipped as a
-    whole, or under a name this cannot match, is not proved by CI."""
+def job_matcher(name):
+    """A job as the run names it: a matrix adds " (values)", and an expression is a value."""
+    same = step_matcher(name)
+    return lambda shown: same(shown) or same(re.sub(r" \(.*\)$", "", shown))
+
+
+def step_state(ci, path, name, job=None):
+    """The step counts as run only when the run shows it running, in its own job: another job
+    may have a step of the same name. A step in a job skipped as a whole, in a job this cannot
+    match, or under a name this cannot match, is not proved by CI."""
     jobs = [j for j in ci["jobs"] if j.get("workflow") == path]
     if not jobs:
         return "workflow did not run"
+    if job:
+        owned = job_matcher(job)
+        jobs = [j for j in jobs if owned(j.get("job") or "")]
+        if not jobs:
+            return f"not seen in the run (no job named {job!r} in it)"
     matches = step_matcher(name)
     if any(matches(step) for j in jobs for step in j["ran"] + j["failed"]):
         return "ran"

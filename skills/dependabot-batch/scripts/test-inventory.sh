@@ -117,6 +117,7 @@ jobs(11, ("JS", "success", GREEN_JS), ("E2E", "success", GREEN_E2E))
 workflow = """name: CI
 jobs:
   e2e:
+    name: E2E
     steps:
       - name: Run E2E tests
         run: npm run test:e2e
@@ -249,6 +250,32 @@ b13 = "dependabot/npm_and_yarn/baz-2.0.0"
 h13 = pr(13, "chore(deps-dev): bump baz from 1.0.0 to 2.0.0", b13, [bot(meta(("baz", "2.0.0", "development", "major")))])
 runs(b13, run(131, b13, h13))
 jobs(131, ("E2E", "success", GREEN_E2E))
+
+# #14: two jobs with a step of the same name. The one that ran uses another action; the bumped
+# action's step was skipped in its own job.
+b14 = "dependabot/github_actions/actions/upload-artifact-8"
+h14 = pr(14, "ci: bump actions/upload-artifact from 7 to 8", b14,
+         [bot(meta(("actions/upload-artifact", "'8'", "production", "major")))], files=(".github/workflows/ci.yml",))
+runs(b14, run(141, b14, h14))
+jobs(141, ("docs", "success", steps(("Upload artifact", "success"))),
+     ("End to end", "success", steps(("Run E2E tests", "success"), ("Upload artifact", "skipped"))))
+put(f"api -H Accept: application/vnd.github.raw repos/o/r/contents/.github/workflows/ci.yml?ref={h14}", """name: CI
+jobs:
+  docs:
+    steps:
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+
+  e2e:
+
+    name: End to end
+    steps:
+      - name: Run E2E tests
+        run: npm run test:e2e
+      - name: Upload artifact
+        if: failure()
+        uses: actions/upload-artifact@v8
+""")
 PY
 
 echo "inventory.py"
@@ -309,7 +336,7 @@ has "PRs that Dependabot leaves alone" "PRs Dependabot will not rebase: #4 #7"
 has "an old PR that Dependabot stopped rebasing" "older than 30 days, no automatic rebase (ask with \`@dependabot rebase\`): #5"
 
 echo "== what a skipped job hides"
-run 8 9 10 11 12
+run 8 9 10 11 12 14
 status "reads the second batch" 0
 if [ -f "$FX/.misses" ]; then echo "  (unexpected gh calls)"; sed 's/^/    /' "$FX/.misses"; fi
 has "an action in a job skipped as a whole is not proved" \
@@ -330,6 +357,8 @@ hasnt "and is not also listed as using none of them" "Upload notes (8.3)"
 has "a Babel major is a build tool major" "build tool majors, check what ships too: #11"
 has "a cancelled run beside a passing one of the same workflow is no failure" "| #12 | npm | dev | bar 1.0.0 -> 2.0.0 | major | pass |"
 hasnt "and its cancelled step is not a failure" "#12 failed"
+has "a step is matched in its own job, not in another job with a step of the same name" \
+    '#14 actions/upload-artifact: step "Upload artifact" in .github/workflows/ci.yml: skipped'
 
 echo "== no finding, but steps CI did not run"
 WF_KEY="$(printf '%s' "api repos/o/r/actions/workflows?per_page=100" | tr -c 'A-Za-z0-9._-' '-')"

@@ -260,6 +260,29 @@ stub_tsc "$BASE" '{"compilerOptions":{"target":"es2020"},"files":["a.ts","b.ts"]
 stub_tsc "$HEAD" '{"compilerOptions":{"strict":true,"target":"es2020"},"files":["a.ts","b.ts"]}'
 run --base "$BASE" --head "$HEAD" --only tsc
 status "strict turned on is no loss" 0
+# The project the check script names is what CI type-checks: tsc -p tsconfig.ci.json.
+stub_tsc_projects() { # stub_tsc_projects TREE DEFAULT_JSON CI_JSON
+    printf '%s\n' "$2" >"$1/stub/tsc-default.json"
+    printf '%s\n' "$3" >"$1/stub/tsc-ci.json"
+    cat >"$1/node_modules/.bin/tsc" <<'EOF'
+#!/bin/sh
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+case " $* " in
+    *" -p tsconfig.ci.json "*) cat "$root/stub/tsc-ci.json" ;;
+    *) cat "$root/stub/tsc-default.json" ;;
+esac
+EOF
+    chmod +x "$1/node_modules/.bin/tsc"
+    : >"$1/tsconfig.json"
+    printf '{"scripts":{"check-types":"tsc -p tsconfig.ci.json --noEmit"}}\n' >"$1/package.json"
+}
+stub_tsc_projects "$BASE" '{"compilerOptions":{"strict":true},"files":["a.ts"]}' '{"compilerOptions":{"strict":true},"files":["a.ts"]}'
+stub_tsc_projects "$HEAD" '{"compilerOptions":{"strict":true},"files":["a.ts"]}' '{"compilerOptions":{"strict":false},"files":["a.ts"]}'
+run --base "$BASE" --head "$HEAD" --only tsc
+status "strict turned off in the script's project exits 1, with the default tsconfig unchanged" 1
+has "names the project" "tsconfig (tsconfig.ci.json)"
+has "and the weakened checks" "WEAKENED checks no longer on (10): strict"
+rm -f "$BASE/package.json" "$HEAD/package.json"
 stub_tsc "$BASE" '{"compilerOptions":{"strict":true},"files":["a.ts","b.ts"]}'
 stub_tsc "$HEAD" '{"compilerOptions":{"strict":true},"files":["a.ts"]}'
 run --base "$BASE" --head "$HEAD" --only tsc
