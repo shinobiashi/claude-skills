@@ -200,8 +200,9 @@ git status --short && git branch --show-current
 - CLAUDE.md がモデル運用(例: opusplan = plan mode は Opus、実行は Sonnet)を指定しており、現在の
   モデルがそれに沿っていない場合は1行で伝え、続行してよいか確認する
 - **CI の有無と記録ディレクトリを決める**(「CI・docs の無いリポジトリ」)。`resume` / `fix` のときは、まず記録ディレクトリの
-  候補(`docs/reviews/<ブランチ>/` と `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`)の両方で
-  状態ファイルを探す(linked worktree では `.git` がファイルなので、相対パスの `.git/dev-cycle/` では見つからない)
+  候補で状態ファイルを探す: CLAUDE.md が記録の置き場所を指定していればそこ、次に `docs/reviews/<ブランチ>/`、
+  `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/` の順(linked worktree では `.git` がファイルなので、
+  相対パスの `.git/dev-cycle/` では見つからない)。見つかった状態ファイルの「記録:」の行が、以後の記録ディレクトリになる
 - 引数と現在ブランチから「新規 / resume / fix」を判定する
 
 ### Step 1. 計画(ゲート: 計画承認)
@@ -221,7 +222,8 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
 ```
 
 1. 状態ファイル `<記録ディレクトリ>/dev-cycle.md` を作成する(先頭に CI の有無と記録の置き場所を書く)。新規開始なのに
-   `.git/dev-cycle/<ブランチ>/` が既にある(同じ名前のブランチで以前に回した)ときは、中身を `archive/<日時>/` に移してから始める。
+   記録ディレクトリ(`docs/` の下でないもの。CLAUDE.md で指定した場所を含む)が既にある(同じ名前のブランチで以前に回した)ときは、
+   中身を `archive/<日時>/` に移してから始める。
    残したままだと、review-loop が古い `R*.md` を見て R2 から始めたり「完了済み」と答えたりする
 2. 承認された計画どおりに実装する。計画外の変更が必要になったら「人間に確認する条件」に従い停止する
 3. 品質チェックを green にする(2回の修正で無理なら停止)
