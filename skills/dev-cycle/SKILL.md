@@ -37,8 +37,52 @@ description: >
 | レビュー基準 | `docs/review-criteria.md` | `review-loop` スキルの重大度定義 |
 | PR 本文 | PR 本文に書く項目 | 「対応フェーズ / 変更概要 / テスト内容 / 設計ドキュメントからの逸脱(あれば)」 |
 | ローカル環境 | 実装前に必要な環境(wp-env / docker compose / nvm 等) | 特に無し |
+| CI | CI の有無(「CI は無い」等の記載) | Step 0 で判定する(下の「CI・docs の無いリポジトリ」) |
+| 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/`(本文では `.git/dev-cycle/` と略す。linked worktree では `.git` がファイルなので、場所は必ずこのコマンドで解決する) |
 
 以下、「品質チェック」はこの表で決めたコマンド一式を順に実行し、すべて成功することを指す。
+「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。記録の置き場所が `docs/` の下でないときは、本文の `docs/reviews/<ブランチ>/`・
+`docs/review-backlog.md` を記録ディレクトリに、`docs/review-baseline.md` を
+`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md`(ブランチをまたいで使う)に読み替える。
+`docs/` の無いリポジトリに、記録のためだけに `docs/` を作らない(次の Step 0 が `docs/` を見つけて置き場所が変わってしまう)。
+
+## CI・docs の無いリポジトリ
+
+スキル集・個人用ツールなど、GitHub Actions も `docs/` も持たないリポジトリでも同じ流れで回す。Step 0 で次の 2 つを決め、
+状態ファイルの先頭に書く(`- CI: なし` / `- 記録: <git common dir の絶対パス>/dev-cycle/<ブランチ>/(リポジトリに置かない)`。
+「記録:」の行は `resume` で以後の記録ディレクトリとして読むので、略さず絶対パスで書く)。
+
+**CI の有無**: CLAUDE.md に記載があればそれに従う。無ければ、リポジトリ自身の workflow(`.github/workflows/` の下)が 0 本のとき
+「CI なし」とする。`total_count` は使わない: GitHub が自分で登録する dynamic な workflow(Copilot のコードレビューは一度動くと
+`dynamic/agents/copilot-pull-request-reviewer` として載る。Dependabot・Pages も同様)が数に入り、dev-cycle を一度回したリポジトリは
+常に「あり」になる。ただし Actions 以外の CI は check として出るので、直近にマージされた PR があれば `gh pr checks` も見て、
+check が 1 件でもあれば「CI あり」に戻す(Copilot のレビューは check に出ない)。
+
+```bash
+gh api "repos/{owner}/{repo}/actions/workflows?per_page=100" \
+  --jq '[.workflows[] | select(.path | startswith(".github/workflows/"))] | length'   # 0 なら CI なしの候補
+N=$(gh pr list --state merged --limit 1 --json number --jq '.[0].number // empty')
+[ -n "$N" ] && gh pr checks "$N"                                                     # check があれば CI あり
+```
+
+迷ったら「CI あり」として進め、Step 5 の `CI=none` で判断する(スクリプトは、リポジトリ自身の workflow が無いことも伝える)。
+
+**記録ディレクトリ**: CLAUDE.md に指定があればそれ、無ければ `docs/` の有無で決める。`docs/` が無いときは
+`D="$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>"` に作る。
+
+| ステップ | CI なし | 記録をリポジトリに置かない |
+|---|---|---|
+| Step 0・2 | 品質チェックがそのまま品質ゲートになる。CLAUDE.md に無ければ、テスト・lint を探して計画で示す | 状態ファイルを記録ディレクトリに作る |
+| Step 3 | — | review-loop に記録ディレクトリを渡す(backlog も同じ場所。baseline はブランチをまたぐので `.git/dev-cycle/review-baseline.md`) |
+| Step 4 | — | PR 本文に review-loop のサマリと、backlog に送った指摘(「今回は直さない指摘」)を書く。`R*.md` への参照は書かない |
+| Step 5 | 飛ばす(待つ CI が無い) | — |
+| Step 6 | `--wait-ci` を付けない | — |
+| Step 7 | CI の結果の代わりに、品質チェックの結果をラウンド報告とサマリコメントに書く | `G<n>.md`・backlog は記録ディレクトリに書き、backlog に足した指摘は PR 本文にも足す(`gh pr edit`)。記録用 `docs:` コミットはしないので、次の依頼の `T` は修正の push の `T`。**修正が無く push も無かったラウンドの後は HEAD が変わらない**ので、依頼の直前に `T` を取り直す(Step 7-8) |
+| Step 8 | 最終報告の「CI」の行は「なし(品質チェックのみ)」 | `final-report.md` を記録ディレクトリに書き、同じ内容を PR に 1 件のコメントとして投稿する(コミットの代わり) |
+
+`.git/dev-cycle/` は共通の git ディレクトリの下なので、worktree からも同じ場所になる。追跡されず、セッションをまたいでも
+残るので `resume` に使える。scratchpad はセッションごとに消えるので記録ディレクトリにしない。Codex・Copilot は
+`.git/` を読めないので、重複指摘を避けるための情報(保留の理由・backlog)は PR 本文とラウンドのコメントに書く。
 
 ## 引数
 
@@ -63,6 +107,7 @@ description: >
 
 - Step 2 の実装コミット、Step 3 の review-loop 内コミット、Step 4 の初回 push と PR 作成
 - Step 7 で**確認ゲートを通過した後**の commit/push、および Step 7・8 の記録用 `docs:` コミット
+  (記録をリポジトリに置かない場合は、その代わりの Step 8 の最終報告コメント・`fix` の追記コメントと、自分が作った PR の本文の更新)
 
 逆に、以下は起動をもってしても許可されない(「絶対にしないこと」参照)。上記に列挙されていない
 commit/push/PR 操作が必要になった場合は、勝手に行わず AskUserQuestion で確認する。
@@ -114,12 +159,14 @@ review-loop / PR:
 
 ## 状態ファイルとレジューム
 
-`docs/reviews/<ブランチ名>/dev-cycle.md` に進行状況を記録し、各ステップ完了時に更新する。
+記録ディレクトリの `dev-cycle.md`(既定 `docs/reviews/<ブランチ名>/dev-cycle.md`)に進行状況を記録し、各ステップ完了時に更新する。
 `resume` 指定時、または引数なしで feat ブランチ上で起動された時はこのファイルを読んで再開する。
 ファイルが無い feat ブランチ上で起動された場合は「このブランチで dev-cycle を始めるか」を確認する。
 
 ```markdown
 # dev-cycle 状態: feat/example-feature
+- CI: あり(CI なしなら「なし(品質チェックのみ)」)
+- 記録: docs/reviews/feat/example-feature/(または /path/to/repo/.git/dev-cycle/feat/example-feature/(リポジトリに置かない)。絶対パスで書く)
 - タスク: <タスク概要>
 - 開始: 2026-09-06
 - PR: #12 https://github.com/<owner>/<repo>/pull/12(未作成なら「未作成」)
@@ -153,6 +200,10 @@ git status --short && git branch --show-current
   いなければ起動する。失敗したら停止して報告
 - CLAUDE.md がモデル運用(例: opusplan = plan mode は Opus、実行は Sonnet)を指定しており、現在の
   モデルがそれに沿っていない場合は1行で伝え、続行してよいか確認する
+- **CI の有無と記録ディレクトリを決める**(「CI・docs の無いリポジトリ」)。`resume` / `fix` のときは、まず記録ディレクトリの
+  候補で状態ファイルを探す: CLAUDE.md が記録の置き場所を指定していればそこ、次に `docs/reviews/<ブランチ>/`、
+  `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<ブランチ>/` の順(linked worktree では `.git` がファイルなので、
+  相対パスの `.git/dev-cycle/` では見つからない)。見つかった状態ファイルの「記録:」の行が、以後の記録ディレクトリになる
 - 引数と現在ブランチから「新規 / resume / fix」を判定する
 
 ### Step 1. 計画(ゲート: 計画承認)
@@ -171,7 +222,10 @@ git switch main && git pull
 git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: feat/<slug>)
 ```
 
-1. 状態ファイル `docs/reviews/<ブランチ>/dev-cycle.md` を作成する
+1. 状態ファイル `<記録ディレクトリ>/dev-cycle.md` を作成する(先頭に CI の有無と記録の置き場所を書く)。新規開始なのに
+   記録ディレクトリ(`docs/` の下でないもの。CLAUDE.md で指定した場所を含む)が既にある(同じ名前のブランチで以前に回した)ときは、
+   中身を `archive/<日時>/` に移してから始める。
+   残したままだと、review-loop が古い `R*.md` を見て R2 から始めたり「完了済み」と答えたりする
 2. 承認された計画どおりに実装する。計画外の変更が必要になったら「人間に確認する条件」に従い停止する
 3. 品質チェックを green にする(2回の修正で無理なら停止)
 4. 論理単位ごとに commit する(Conventional Commits・英語・`git add <path>` で明示的に追加。
@@ -186,11 +240,13 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
   (本スキル起動により commit は許可済み)
 - R3 で APPROVE にならなかった場合は review-loop の報告をそのまま引き継いで**停止**する
   (設計レベルの問題の可能性。人間の判断)
+- 記録ディレクトリが `docs/` の下でなければ、それを review-loop に渡す(`R*.md`・backlog はそこに置き、baseline は
+  `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md` を使う。ブランチをまたいで許容項目を引き継ぐため)
 
 ### Step 4. push と PR 作成
 
 `start-task` の規約に従う。issue を作成するかは CLAUDE.md の運用に従う(指定が無ければ作成しない)。
-レビュー bot の起動もここでは行わない(CI 通過後に Step 6 で行う)。
+レビュー bot の起動もここでは行わない(CI 通過後に Step 6 で行う。CI なしなら push の直後でよい)。
 
 ```bash
 G=<Base directory for this skill>/scripts/gate-round.sh
@@ -203,10 +259,14 @@ Step 6 の `--since` に渡す値はすべてこの出力から取る(Step 6 の
 
 PR 本文(日本語)は「プロジェクト設定の読み取り」で決めた項目(既定: 「対応フェーズ / 変更概要 /
 テスト内容 / 設計ドキュメントからの逸脱(あれば)」)に、review-loop のサマリ(ラウンド数・修正数・
-backlog 数と `docs/reviews/<ブランチ>/R*.md` への参照)を加える。末尾にシステムプロンプト指定の
+backlog 数と `docs/reviews/<ブランチ>/R*.md` への参照)を加える。記録をリポジトリに置かない場合は参照の代わりに、
+backlog に送った指摘を「今回は直さない指摘」として本文に並べる(bot は `.git/` の記録を読めない)。末尾にシステムプロンプト指定の
 署名を付ける。PR 番号と URL を状態ファイルに記録する。
 
 ### Step 5. CI 待ち
+
+**CI なしのリポジトリでは、このステップを飛ばす**(Step 6 も `--wait-ci` を付けない)。品質チェックの green が
+品質ゲートで、ラウンド報告・サマリコメント・最終報告には CI の代わりにその結果を書く。
 
 依頼しない CI 待ち(最終ラウンドの修正の後、Step 8 の記録用 `docs:` コミットの後)は、本スキル同梱の
 `scripts/request-gate-review.sh` の `--ci-only` で待つ。Bash `run_in_background`(前面の `sleep` は使えない。完了時に1回通知が来る)、
@@ -235,13 +295,14 @@ Step 6 の依頼の直前の CI 待ちは、`--wait-ci` で依頼とまとめる
 
 対象は「未収束 かつ 依頼回数 < 3」の bot のみ。**push 直前**の UTC 時刻 `T` を `--since` で渡す。
 
-> **`T` は必ず `scripts/gate-round.sh push` の出力から取る**(初回 push も含む。Step 4 参照)。
+> **`T` は必ず `scripts/gate-round.sh push` の出力から取る**(初回 push も含む。Step 4 参照)。例外は、push の無いラウンドの後に
+> 同じ HEAD へ再依頼するときだけ(Step 7-8「修正も push も無かったラウンドの後の `T`」)。
 > あとから `git log` で作り直そうとすると取り違えやすい——`--date=format:%Y-%m-%dT%H:%M:%SZ` は
 > **コミット自身のタイムゾーンのまま**整形して末尾に `Z` を付けるだけなので、JST のコミットは
 > 9時間先の「UTC」になる(`format-local:` でないと UTC にならない)。実際にこれで `T` が未来になり、
-> `gate-threads.sh list/status` が新規指摘を1件も返さなかったことがある。bot の応答判定自体は
-> `commit_id` で行うので `request-gate-review.sh` は正常に応答を検出し、**スレッドだけが 0 件**という
-> 気づきにくい形で出る。手で作る場合は `TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd`。
+> `gate-threads.sh list/status` が新規指摘を1件も返さなかったことがある(当時は応答の判定が `commit_id` だけだったので、
+> 応答は検出され**スレッドだけが 0 件**という気づきにくい形で出た)。いまはレビューも `T` 以降の提出だけを応答と数えるので、
+> `T` が未来だと応答も検出されず **TIMEOUT** になる。TIMEOUT が続くときは `T` を疑う。手で作る場合は `TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd`。
 
 依頼と待ちは本スキル同梱の `scripts/request-gate-review.sh` で行う
 (手書きの `gh` ループに戻さない。理由は後述):
@@ -287,8 +348,9 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   方法ごとに最大 90 秒、その後も最初の依頼から合計 5 分までは証拠を待ち(timeline の遅延と、レビュー本体の
   到着を拾う)、それでも無ければ **exit 2**。以前のように 15 分待ってから諦めない。実 PR(jp4wc-rakusync #12、
   2026-09-24)では `gh pr edit` の依頼が 0 秒で pending 一覧に現れ、2 分後にレビューが届いた
-- 応答の判定は提出時刻ではなく **review の `commit_id` が現 HEAD と一致するか**で行う(両 bot とも
-  1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある)。Codex は加えて
+- 応答の判定は **review の `commit_id` が現 HEAD と一致し、かつ `T` 以降に提出されたか**で行う(両 bot とも
+  1 時間以上遅れて、古い push へのレビューを今ラウンド中に投稿することがある。提出時刻も見るのは、同じ HEAD へ
+  再依頼したときに前のラウンドのレビューを応答と数えないため。新しい HEAD では `T` が push の前なので影響しない)。Codex は加えて
   `issues/<N>/comments` の `T` 以降のコメント(指摘なしの "Didn't find any major issues")と、PR 本文への `T` 以降の 👍
   (Codex が説明している「指摘なし」の印)も応答と見なす。**「Codex Review Summary」コメント**
   (`<!-- codex-pull-request-review-summary -->`)は応答と見なさない。PR ごとに 1 件で、Codex が動き出した時点で
@@ -302,8 +364,9 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   最初の 1 本で待ちを終えると取りこぼす(Japanized-for-WooCommerce PR #281・#282、2026-10-23。3〜4 分後)。
   追加のレビューが来たら `another Copilot review of <sha> arrived (N in all)` と出して待ち直す。Codex を待って
   いる時間もこの窓に数えるので、Codex が後から応答するラウンドでは余計にかからない。`--copilot-settle 0` で無効
-- `--since` を渡さないと `T` が「今」になり、CI 待ちの間に届いた Codex の自動レビューが Step 7 の
-  `gate-threads.sh list <N> <T>` で「この push 以前」として除外される
+- `--since` を渡さないと `T` が「今」になり、CI 待ちの間や PR 作成時に届いた自動レビューが、応答としても数えられず
+  (TIMEOUT になる)、Step 7 の `gate-threads.sh list <N> <T>` でも「この push 以前」として除外される。`--wait-only` で
+  待ち直すときも同じ `T` を渡す
 - `--wait-ci` の時は依頼より前に、現 HEAD の sha の **workflow run**(`gh api repos/…/actions/runs?head_sha=`)を
   20 秒ごとに見て、すべて完了するまで待つ(最大 `--ci-timeout` 秒。既定 2,700 秒 = 15 分の CI にランナー待ちが乗っても
   足りる値)。run は push が登録された瞬間から queued として見えるので、ランナー待ちを「CI が始まっていない」と
@@ -348,7 +411,7 @@ TIMEOUT(exit 1)なら「人間に確認する条件」(`--wait-only` で待ち�
 
 ### Step 7. ゲートラウンド G<n>(ゲート: 確認ゲート)
 
-ラウンド番号 n は Step 6 の依頼回数(両 bot 共通。`sequential` 時は通しのターン番号)。記録は `docs/reviews/<ブランチ>/G<n>.md`。
+ラウンド番号 n は Step 6 の依頼回数(両 bot 共通。`sequential` 時は通しのターン番号)。記録は `<記録ディレクトリ>/G<n>.md`。
 
 **1. 未解決スレッドと Copilot レビュー本文の取得**(REST は resolved 状態を返さないため GraphQL。
 `fix-copilot-review` スキル同梱の `gate-threads.sh` が問い合わせ・返信・Resolve をまとめて持っているので
@@ -391,7 +454,7 @@ bot の重大度を鵜呑みにしない。該当ファイルと周辺コード�
 | 区分 | 条件 | 扱い |
 |---|---|---|
 | 修正 | Critical / High / Medium で妥当 | このラウンドで修正 |
-| 保留 | Low、差分範囲外、誤検知、既に対応済み、`docs/review-baseline.md` の許容項目 | 修正しない。理由をスレッドに返信、未解決のまま残す、`docs/review-backlog.md` に追記 |
+| 保留 | Low、差分範囲外、誤検知、既に対応済み、baseline(`docs/review-baseline.md` など)の許容項目 | 修正しない。理由をスレッドに返信、未解決のまま残す、backlog(`docs/review-backlog.md` など)に追記。記録をリポジトリに置かない場合は PR 本文の「今回は直さない指摘」にも足す |
 | 人間確認 | 「人間に確認する条件」のゲートラウンド項目に該当 | AskUserQuestion で1件ずつ(修正する / 保留 / 中断) |
 
 **4. 修正**: 指摘の趣旨に対する最小限の変更。品質チェックを green にする(2回で無理なら停止)。
@@ -419,7 +482,8 @@ git push origin <ブランチ>
 ```
 
 論理的に独立した修正はコミットを分ける。push 後に `G<n>.md`(下記フォーマット)と状態ファイルを
-更新し、`docs: record dev-cycle gate round <n>` として commit・push する。
+更新し、`docs: record dev-cycle gate round <n>` として commit・push する。記録をリポジトリに置かない場合は、
+更新するだけでコミットしない(次の依頼の `T` は修正の push の `T`)。
 
 `gate-round.sh publish` は PR の head が push に追いつくのを最長 60 秒待つので、push の直後に続けて実行してよい
 (以前は GitHub 側の数秒の遅れで「local HEAD is not the PR head」と拒まれていた)。
@@ -462,9 +526,22 @@ G=<Base directory for this skill>/scripts/gate-round.sh
 - 途中で失敗した時は投稿済みの一覧を出すので、再実行は残りの指摘だけにする(全件を渡すと二重に返信する)
 - `--dry-run` で実行内容だけ確認できる
 
-**8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8。それ以外は Step 5 へ
+**8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8(「未収束(同じ HEAD へは依頼できない)」で
+対象から外した bot は、ここでは終わったものとして数える)。それ以外は Step 5 へ
 戻り、CI green 後に未収束 bot へ再依頼する(Step 6)。3 回目の依頼に対する修正は push して CI を
 待つが、**再依頼はしない**。`sequential` 時は、次にどの bot へ依頼するかを「順番実行」節で決める。
+
+**修正も push も無かったラウンドの後の `T`**: 記録用 `docs:` コミットをしない(記録をリポジトリに置かない)と、HEAD は前のラウンドの
+まま。その HEAD へ再依頼するときは、次の順に進める。
+
+1. 前の `T` で `gate-threads.sh status <N> <前の T>` を取り直す。前のラウンドの後に遅れて届いた指摘(Copilot の 2 本目のレビュー、
+   打ち切った bot の応答)は、新しい `T` では拾えないので、ここで前のラウンドの指摘として仕分ける
+2. 依頼の直前に `T=$(date -u +%Y-%m-%dT%H:%M:%SZ)` を取り直し、`--since` と `gate-threads.sh` に渡す。古い `T` のままだと、
+   前のラウンドのレビューを応答と数え、前のラウンドで保留にしたスレッドも新規指摘として混ざる(スクリプトは `T` より前に
+   提出されたレビューを数えないので、新しい `T` なら前のラウンドのレビューは応答にならない)
+3. Codex が push で自動レビューするリポジトリでは、同じ HEAD に Codex を起こす手段が無い(`@codex review` は接続の案内が返るだけ)。
+   Codex は「未収束(同じ HEAD へは依頼できない)」として記録し、Step 6 の対象から外す。Copilot が対象(未収束かつ依頼回数 < 3)なら
+   `--copilot-only` で依頼する。対象の bot が残らなければ依頼せず Step 8 へ進む(後で push があれば、Codex は自動レビューで戻ってくる)
 
 **修正の無いラウンドでもゲートを終えない**: 新規指摘をすべて保留にして修正が無かったラウンドでも、その bot は
 未収束なので、依頼回数が 3 未満なら Step 5 へ戻って再依頼する。「コードが変わっていないので同じ指摘が返るだけ」と
@@ -494,8 +571,10 @@ Codex はそこで初めて指摘 0 件 = 収束になった)。再依頼せず�
 
 ### Step 8. 最終報告と停止
 
-1. `docs/reviews/<ブランチ>/final-report.md` に下記「最終報告」を書き、状態ファイルを「完了」に更新し、
-   `docs: record dev-cycle final report` として commit・push する
+1. `<記録ディレクトリ>/final-report.md` に下記「最終報告」を書き、状態ファイルを「完了」に更新し、
+   `docs: record dev-cycle final report` として commit・push する。記録をリポジトリに置かない場合はコミットせず、
+   同じ内容を `gh pr comment <N> --body-file <final-report.md>` で PR に 1 件投稿する(PR 本文の件数・状態も古ければ
+   `gh pr edit <N> --body-file` で直す)
 2. 同じ内容をユーザーに報告して**停止**する。マージはしない
 
 ### `fix <ID>...`(最終報告後の人間判断による修正)
@@ -504,7 +583,8 @@ Codex はそこで初めて指摘 0 件 = 収束になった)。再依頼せず�
 2. Step 7 の 4 → 5(確認ゲート)→ 6 → 7 を実行する。bot への再依頼はしない
    (再レビューを望む場合はユーザーが判断して `gh pr edit <N> --add-reviewer @copilot` /
    `gh pr comment <N> --body "@codex review"` を指示する)
-3. `final-report.md` の「修正しなかった指摘」から該当 ID を「修正した指摘」へ移し、commit・push する
+3. `final-report.md` の「修正しなかった指摘」から該当 ID を「修正した指摘」へ移し、commit・push する。記録をリポジトリに置かない場合は、
+   記録ディレクトリの `final-report.md` を直し、何を直したか(ID・コミット sha)を PR に 1 件のコメントで追記する(Step 8 のコメントは書き換えない)
 
 保留分を1件ずつ対話的に見直したい場合は `/fix-copilot-review <N>` も使える(bot 由来の未解決スレッドを
 すべて対象にし、対応不要と判断したものを AskUserQuestion で確認する)。
@@ -527,7 +607,8 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
   "$R" <N> --since <T> --copilot-only --wait-ci                 # Copilot のターン
   ```
   `--wait-ci` を付けると、前のターンの修正 push の CI 待ち(Step 5)もこの 1 回の呼び出しで済む
-  Bash は Step 6 と同じく `run_in_background`・timeout 5400000ms(`--wait-ci` 込み)
+  Bash は Step 6 と同じく `run_in_background`・timeout 5400000ms(`--wait-ci` 込み)。**CI なしのリポジトリでは `--wait-ci` を外し**、
+  timeout は 1800000ms
 - **`<T>`** は、現在の HEAD を作った直近の push の直前時刻(`gate-round.sh push` が出力する)。前のターンで修正が無く push も無かったなら、前のターンの `<T>` のまま
 - **対象スレッドの絞り込み**: `gate-threads.sh list` / `status` は全 bot のスレッドを返す。そのターンの bot の author
   (Codex: `chatgpt-codex-connector`、Copilot: `copilot-pull-request-reviewer`)だけを対象にする。`bodies` は Copilot のターンだけ読む。
@@ -572,14 +653,15 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 ## Codex / Copilot ゲート
 | ラウンド | bot | 新規指摘 | 修正 | 保留 | 状態 |
 (状態は「収束」(新規指摘が実際に 0 件だった)、「上限」(3 回目の依頼でも新規指摘があった)、
-「未収束(ユーザー判断で終了)」(Step 7-8)、「未確認」(TIMEOUT で打ち切った。bot が指摘を
+「未収束(ユーザー判断で終了)」(Step 7-8)、「未収束(同じ HEAD へは依頼できない)」(Step 7-8。push で自動レビューする Codex に、
+修正の無いラウンドの後は依頼できない)、「未確認」(TIMEOUT で打ち切った。bot が指摘を
 出し尽くしたわけではなく、応答が待ち時間より遅れているだけの可能性が高い)を区別する)
 ### 修正した指摘
 | ID | bot | 重大度 | 内容 | コミット | スレッド |
 ### 修正しなかった指摘(PR 上で未解決のまま残してある)
 | ID | bot | 重大度 | 理由 | スレッド |
 ## 品質ゲート
-- CI: <run url> green / 品質チェック: green(PHPUnit <n> 件)
+- CI: <run url> green(CI なしなら「なし(品質チェックのみ)」)/ 品質チェック: green(PHPUnit <n> 件)
 ## 次にできること(人間の判断)
 - 保留分の修正: `/dev-cycle fix G1-2 G2-1` または `/fix-copilot-review <N>`
 - 状態が「未確認」の bot があれば: 数時間後(別セッションでもよい)に `/fix-copilot-review <N>`
@@ -596,4 +678,5 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 - 実装は計画ドキュメントのフェーズ順・推奨順に従い、フェーズを跨いだ先回り実装をしない
 - 修正は指摘の趣旨に対する最小限にとどめ、不要なファイル変更をしない
 - `docs/review-baseline.md` / `docs/review-backlog.md` / `docs/reviews/<ブランチ>/R*.md` は
-  Codex / Copilot が重複指摘を避けるために読むため、各ラウンドで最新に保つ
+  Codex / Copilot が重複指摘を避けるために読むため、各ラウンドで最新に保つ。記録をリポジトリに置かない場合、
+  bot はそれを読めないので、保留の理由はスレッドの返信とラウンドのサマリコメントに、backlog は PR 本文に書く

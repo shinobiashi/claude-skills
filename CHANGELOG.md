@@ -421,6 +421,26 @@
   を明記した
 
 ### Changed
+- `dev-cycle`: GitHub Actions も `docs/` も無いリポジトリ（スキル集・個人用ツール）でも同じ流れで回せるようにした。Step 0 で「CI の有無」と
+  「記録ディレクトリ」を決める（CLAUDE.md の記載が優先）。CI の有無はリポジトリ自身の workflow（`.github/workflows/` の下）の数で判定し、
+  直近にマージされた PR に check があれば「あり」に戻す（`total_count` は使わない。Copilot のコードレビューは一度動くと dynamic な workflow として
+  数に入る）。CI なしなら Step 5 を飛ばし、Step 6 と順番実行で `--wait-ci` を付けず、品質チェックを品質ゲートとして報告する。`docs/` が無ければ
+  記録（`dev-cycle.md`・`G*.md`・`final-report.md`・backlog）を `.git/dev-cycle/<ブランチ>/`（実体は `git rev-parse --path-format=absolute --git-common-dir` の下。linked worktree でも同じ場所）に置く（追跡されず、セッションをまたいで残るので
+  `resume` が効く。baseline はブランチをまたいで使うので `.git/dev-cycle/review-baseline.md`）。記録用 `docs:` コミットはせず、最終報告と `fix` の結果は
+  PR へのコメントで、backlog は PR 本文で残す（bot は `.git/` を読めない）。修正も push も無かったラウンドの後は HEAD が変わらないので、同じ HEAD への
+  再依頼の直前に `T` を取り直す。`request-gate-review.sh` は、(1) 応答と数えるレビューを `T` 以降に提出されたものに絞り（同じ HEAD への再依頼で、
+  前のラウンドのレビューを応答と数えない）、(2) CI の run から dynamic な run（Copilot のコードレビューなど）を除き（CI の無いリポジトリで
+  Copilot の run を「CI passed」と読まない）、(3) `CI=none` で止まったときにリポジトリ自身の workflow が無ければ `--wait-ci` を外すよう案内する。
+  テスト 186 → 203 件。新しい判定を確かめる 7 件は、修正前のスクリプトで落ちる。残りの 10 件は、次の 3 点を固定する。push の後・スクリプトの起動前に
+  届いたレビューを取りこぼさないこと、workflows API のエラーを「workflow が無い」と読まないこと、workflow のあるリポジトリで「CI なし」と
+  案内しないこと（とその補助のアサーション）。PR 前のセルフレビュー（独立エージェント）で、`total_count` の判定と
+  同じ HEAD への再依頼の 2 件（High）と、`docs/` 前提が残った箇所などを直した。背景: claude-skills PR #2 で、CI 待ちを飛ばすことと記録の
+  置き場所を毎回手で判断した（ユーザー指示）
+- `review-loop`: 記録の置き場所を「プロジェクト設定の読み取り」に足した。`dev-cycle` から渡された場所、無ければ `docs/` の有無で
+  `docs/reviews/<ブランチ>/` か `.git/dev-cycle/<ブランチ>/`（baseline は `.git/dev-cycle/review-baseline.md`）を使う。`docs/` の無いリポジトリに
+  記録のためだけに `docs/` を作らない
+- `post-merge`: 手順 4 に、`dev-cycle` がリポジトリの外に置いた記録（`.git/dev-cycle/<ブランチ>/`）の削除の提案を足した。残すと、同じ名前の
+  ブランチを作り直したときに review-loop が古い `R*.md` を読む
 - `dependabot-batch`: §2 の判定に「兄弟の更新待ち」を追加した。単独では毎回落ちるが、同じ系統の更新が先に入ると通る PR で、共有の依存が
   古いままの兄弟に引き止められて二重に入っているもの。見分け方（`node_modules` のコピーを数える）と、`merge-sim.sh` の tip にその PR の
   `package.json` の変更を当ててリベース後の状態を作る確かめ方を書いた。§6 に、そうした PR の修正は兄弟のマージと Dependabot のリベースの

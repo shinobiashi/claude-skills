@@ -83,6 +83,7 @@ PR の本文に残った未チェックの項目（`- [ ]`）は、「マージ�
   3. **未 push のコミットが無い**: `git log origin/<branch>..<branch>` が空（リモートを既に消していると失敗するので、その場合は
      `git log <default>..<branch>` で本流に無いコミットが無いことを確認）
 - `git worktree list` を確認し、対象ブランチに紐づく worktree があれば削除を提案 → 承認後に `git worktree remove <path>`。（`claude -w` を使っていた場合に該当）
+- `dev-cycle` が記録をリポジトリの外に置いていた場合（`docs/` の無いリポジトリ）、その記録ディレクトリが残る。場所は、CLAUDE.md が記録の置き場所を指定していればそこ、無ければ既定の `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<branch>/`（状態ファイル `dev-cycle.md` の「記録:」の行にも書いてある）。あれば中身（`dev-cycle.md`・`R*.md`・`G*.md` など）を示して削除を提案 → 承認後に、パスを変数に入れて引用符で囲んで消す（`D="$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/<branch>"` のあと `rm -r -- "$D"`。リポジトリのパスに空白があると、引用符なしの `rm -r` は別の場所を消す）。`$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md` はブランチをまたいで使うので消さない。残すと、同じ名前のブランチを作り直したときに review-loop が古い `R*.md` を読む。
 - 追跡ブランチの掃除として `git fetch --prune` を提案。
 - **リモートブランチは GitHub の「マージ時にブランチを自動削除」で既に消えていることが多い**。`git push origin --delete` の前に
   `git ls-remote --heads origin <branch>` で存在を確認し、無ければ削除を試みない（試すと "remote ref does not exist" で失敗する。無害だが紛らわしい）。
