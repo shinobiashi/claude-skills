@@ -41,7 +41,7 @@ description: >
 | 記録の置き場所 | dev-cycle・review-loop の記録(`dev-cycle.md`・`R*.md`・`G*.md`)を置く場所、またはリポジトリに置かない旨 | `docs/` があれば `docs/reviews/<ブランチ>/`、無ければ `.git/dev-cycle/<ブランチ>/` |
 
 以下、「品質チェック」はこの表で決めたコマンド一式を順に実行し、すべて成功することを指す。
-「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。記録の置き場所が `docs/` でないときは、本文の `docs/reviews/<ブランチ>/`・
+「記録ディレクトリ」は「記録の置き場所」で決めた場所を指す。記録の置き場所が `docs/` の下でないときは、本文の `docs/reviews/<ブランチ>/`・
 `docs/review-backlog.md` を記録ディレクトリに、`docs/review-baseline.md` を
 `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md`(ブランチをまたいで使う)に読み替える。
 `docs/` の無いリポジトリに、記録のためだけに `docs/` を作らない(次の Step 0 が `docs/` を見つけて置き場所が変わってしまう)。
@@ -237,7 +237,7 @@ git switch -c <ブランチ名>    # ブランチ命名規則に従う(既定: f
   (本スキル起動により commit は許可済み)
 - R3 で APPROVE にならなかった場合は review-loop の報告をそのまま引き継いで**停止**する
   (設計レベルの問題の可能性。人間の判断)
-- 記録ディレクトリが `docs/reviews/<ブランチ>/` 以外なら、それを review-loop に渡す(`R*.md`・backlog はそこに置き、baseline は
+- 記録ディレクトリが `docs/` の下でなければ、それを review-loop に渡す(`R*.md`・backlog はそこに置き、baseline は
   `$(git rev-parse --path-format=absolute --git-common-dir)/dev-cycle/review-baseline.md` を使う。ブランチをまたいで許容項目を引き継ぐため)
 
 ### Step 4. push と PR 作成
@@ -523,7 +523,8 @@ G=<Base directory for this skill>/scripts/gate-round.sh
 - 途中で失敗した時は投稿済みの一覧を出すので、再実行は残りの指摘だけにする(全件を渡すと二重に返信する)
 - `--dry-run` で実行内容だけ確認できる
 
-**8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8。それ以外は Step 5 へ
+**8. 次へ**: 両 bot が収束、または両 bot の依頼回数が 3 に達していれば Step 8(「未収束(同じ HEAD へは依頼できない)」で
+対象から外した bot は、ここでは終わったものとして数える)。それ以外は Step 5 へ
 戻り、CI green 後に未収束 bot へ再依頼する(Step 6)。3 回目の依頼に対する修正は push して CI を
 待つが、**再依頼はしない**。`sequential` 時は、次にどの bot へ依頼するかを「順番実行」節で決める。
 
@@ -536,7 +537,8 @@ G=<Base directory for this skill>/scripts/gate-round.sh
    前のラウンドのレビューを応答と数え、前のラウンドで保留にしたスレッドも新規指摘として混ざる(スクリプトは `T` より前に
    提出されたレビューを数えないので、新しい `T` なら前のラウンドのレビューは応答にならない)
 3. Codex が push で自動レビューするリポジトリでは、同じ HEAD に Codex を起こす手段が無い(`@codex review` は接続の案内が返るだけ)。
-   そのラウンドは `--copilot-only` で依頼し、Codex は「未収束(同じ HEAD へは依頼できない)」として記録する
+   Codex は「未収束(同じ HEAD へは依頼できない)」として記録し、Step 6 の対象から外す。Copilot が対象(未収束かつ依頼回数 < 3)なら
+   `--copilot-only` で依頼する。対象の bot が残らなければ依頼せず Step 8 へ進む(後で push があれば、Codex は自動レビューで戻ってくる)
 
 **修正の無いラウンドでもゲートを終えない**: 新規指摘をすべて保留にして修正が無かったラウンドでも、その bot は
 未収束なので、依頼回数が 3 未満なら Step 5 へ戻って再依頼する。「コードが変わっていないので同じ指摘が返るだけ」と
@@ -648,7 +650,8 @@ commit/push・GitHub への反映」。**ターンが完結してから次のタ
 ## Codex / Copilot ゲート
 | ラウンド | bot | 新規指摘 | 修正 | 保留 | 状態 |
 (状態は「収束」(新規指摘が実際に 0 件だった)、「上限」(3 回目の依頼でも新規指摘があった)、
-「未収束(ユーザー判断で終了)」(Step 7-8)、「未確認」(TIMEOUT で打ち切った。bot が指摘を
+「未収束(ユーザー判断で終了)」(Step 7-8)、「未収束(同じ HEAD へは依頼できない)」(Step 7-8。push で自動レビューする Codex に、
+修正の無いラウンドの後は依頼できない)、「未確認」(TIMEOUT で打ち切った。bot が指摘を
 出し尽くしたわけではなく、応答が待ち時間より遅れているだけの可能性が高い)を区別する)
 ### 修正した指摘
 | ID | bot | 重大度 | 内容 | コミット | スレッド |
