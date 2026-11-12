@@ -105,7 +105,7 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 - `tag` は「版数に `v` が付いていない」「作業ツリーがクリーン」「default ブランチ上で HEAD = 本流の先端」「プラグインヘッダー・
   `Stable tag` が <ver>」「changelog 見出しがある」「タグ（`<接頭辞><ver>`）が未存在」をすべて検査し、
   **本流リモート以外への push を拒む**（フォークには SVN の secrets が無く、失敗 run が残るだけ）
-- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（129 件）
+- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（131 件）
 
 ## モード
 

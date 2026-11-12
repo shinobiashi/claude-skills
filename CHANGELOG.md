@@ -236,6 +236,10 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `release-bump`: `check` の翻訳呼び出しの数え方が、`__(` で行が終わる呼び出しを見落としていた。prettier は長い文字列を次の行に置くので、
+  JS だけで文字列を足した PR では「.pot が変わっていない」の WARN が出なかった（Japanized-for-WooCommerce PR #330 の 2 件。この PR は自分で `.pot` を
+  更新していたので実害は無かった）。`__(` の直後が行末でも呼び出しと数える。シナリオテストに単体・モノレポの 2 件を足し（131 件）、修正前は
+  その 2 件だけが落ちることを確かめた。
 - `dev-cycle`: `request-gate-review.sh` の `CI=none`(run も check も現れない)で PR の `mergeable` を見て、`CONFLICTING` なら衝突だと出すようにした。
   GitHub は base と衝突している PR に `pull_request` の workflow を走らせない。epsilon-for-woocommerce PR #19 では最後の記録用コミットの
   `CI=none` を `paths-ignore` のせいと読み、衝突に気づかないままマージ可能と報告した(同じ PR の docs だけのコミットには CI が走っていた)。

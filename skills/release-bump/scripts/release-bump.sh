@@ -745,7 +745,9 @@ EOF
 	#    release branch the POT regen is a commit of that branch and not yet of the default
 	#    branch (jp4wc-pro 3.2.0 was warned "no .pot change" right after its regen commit).
 	#    With a plugin directory, only its sources and .pot (a pathspec `*` crosses `/`).
-	calls="(__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\\([[:space:]]*['\"]"
+	#    A call may end its line at `__(`: prettier puts a long string on the next line
+	#    (Japanized-for-WooCommerce #330 added two such JS strings and was not counted).
+	calls="(__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\\([[:space:]]*(['\"]|\$)"
 	strings="$(git diff "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" 2>/dev/null \
 		| grep -cE "^\+.*[^A-Za-z0-9_]$calls" || true)"
 	if [ "${strings:-0}" -gt 0 ]; then

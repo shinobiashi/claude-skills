@@ -334,6 +334,13 @@ LATE="$(git rev-parse --short=7 HEAD)"
 run check
 has "^WARN +translation calls changed after i18n/my-plugin.pot was last regenerated .*: ${LATE} "; check "a translation change after the regen is named by its commit" $?
 git reset -q --hard HEAD~1
+# prettier breaks a long call after `__(` and puts the string on the next line
+mkdir -p src && printf "const label = ok\n\t? __(\n\t\t'Later JS string',\n\t\t'mp'\n\t)\n\t: '';\n" > src/later.js
+git add -A && git commit -q -m "feat: later JS string"
+LATE="$(git rev-parse --short=7 HEAD)"
+run check
+has "^WARN +translation calls changed after i18n/my-plugin.pot was last regenerated .*: ${LATE} "; check "a later call whose string is on the next line (prettier) is named by its commit" $?
+git reset -q --hard HEAD~1
 run prs
 has "^10${TAB}code${TAB}[0-9a-f]{7}${TAB}7${TAB}yes${TAB}"; check "prs reads the changelog from the single release/* branch on upstream by default" $?
 
@@ -538,6 +545,11 @@ printf "<?php\n// __( 'Free string', 'free' );\n" > plugins/free/includes/class-
 git add -A && git commit -q -m "feat: free string"
 run check
 has '^WARN +1 added line\(s\) with translation calls.*no \.pot change'; check "monorepo check: a translation call in the plugin asks for its POT" $?
+git reset -q --hard HEAD~1
+mkdir -p plugins/free/src && printf "const label = ok\n\t? __(\n\t\t'Free JS string',\n\t\t'free'\n\t)\n\t: '';\n" > plugins/free/src/label.js
+git add -A && git commit -q -m "feat: free JS string"
+run check
+has '^WARN +1 added line\(s\) with translation calls.*no \.pot change'; check "monorepo check: a call whose string is on the next line (prettier) asks for its POT" $?
 git reset -q --hard HEAD~1
 git push -q origin release/1.3.0 2>/dev/null
 run check
