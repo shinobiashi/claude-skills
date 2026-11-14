@@ -136,6 +136,8 @@ gh_repo() { # $1 = remote -> owner/repo
 
 # Set by the global options (or their environment variables) in main.
 PLUGIN_DIR_ARG="${RELEASE_BUMP_PLUGIN_DIR:-}"
+OTHER_DIRS=""
+OTHER_EXCLUDES=()
 TAG_PREFIX="${RELEASE_BUMP_TAG_PREFIX:-}"
 # Set by resolve_plugin: the plugin directory ("" for the root, else "dir/"),
 # the main plugin file and the readme, all relative to the repository root.
@@ -189,6 +191,61 @@ plugin_dir_candidates() {
 		done
 }
 
+# The Text Domain header of a plugin file ("" when it has none).
+text_domain_of() { # $1 = plugin file
+	grep -E '^[[:space:]]*\*?[[:space:]]*Text Domain:' "$1" | head -1 \
+		| sed -E 's/^.*Text Domain:[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# Directories below the plugin directory that hold another plugin: a *.php
+# with a Plugin Name header and a Text Domain other than this plugin's. Its
+# strings go to its own POT and its version is its own, so the PR kinds, the
+# carriers and the translation check leave it out (Japanized for WooCommerce
+# keeps the server plugin plugins/artws-security-hub/ in the repository: its
+# calls asked 3.1.0 for a POT regen and its PR for a changelog line). One
+# with the same Text Domain, or none, still counts: its strings may be in
+# this plugin's POT. One directory per line, with a trailing slash.
+other_plugin_dirs() {
+	local own f td d
+	own="$(text_domain_of "$PLUGIN")"
+	{ git grep -lE '^[[:space:]]*\*?[[:space:]]*Plugin Name:' -- "${PDIR}*.php" 2>/dev/null || true; } \
+		| { grep -vE '(^|/)(vendor|node_modules)/' || true; } \
+		| while IFS= read -r f; do
+			[ "$f" != "$PLUGIN" ] || continue
+			d="$(dirname "$f")/"
+			[ "$d" != "${PDIR:-./}" ] || continue
+			td="$(text_domain_of "$f")"
+			[ -n "$td" ] && [ "$td" != "$own" ] || continue
+			echo "$d"
+		done | sort -u
+}
+
+# OTHER_DIRS from other_plugin_dirs(), and OTHER_EXCLUDES: pathspecs that
+# leave them out (expand as ${OTHER_EXCLUDES[@]+"${OTHER_EXCLUDES[@]}"} for
+# bash 3.2 with set -u).
+find_other_plugins() {
+	local d
+	OTHER_DIRS="$(other_plugin_dirs)"
+	OTHER_EXCLUDES=()
+	while IFS= read -r d; do
+		if [ -n "$d" ]; then OTHER_EXCLUDES+=(":(exclude)${d%/}"); fi
+	done <<OTHERS
+$OTHER_DIRS
+OTHERS
+}
+
+# Whether a path (relative to the root) is in another plugin's directory.
+in_other_plugin() { # $1 = path
+	local d
+	[ -n "$OTHER_DIRS" ] || return 1
+	while IFS= read -r d; do
+		case "$1" in "$d"*) return 0 ;; esac
+	done <<OTHERS
+$OTHER_DIRS
+OTHERS
+	return 1
+}
+
 resolve_plugin() {
 	local d pd list n
 	if [ -n "${RELEASE_BUMP_PLUGIN_FILE:-}" ]; then
@@ -217,6 +274,7 @@ resolve_plugin() {
 		esac
 	fi
 	README="${PDIR}readme.txt"
+	find_other_plugins
 }
 
 # Prints "date" when the newest changelog heading is `= x.y.z - <date> =` (or
@@ -280,7 +338,8 @@ previous_tag() {
 # With a plugin directory (PDIR), the rules see paths relative to it, only
 # its files are searched for carriers, and the root's own files (not those of
 # other directories: another plugin of a monorepo can be at the same version)
-# are listed as MENTION.
+# are listed as MENTION. Another plugin below the plugin directory
+# (other_plugin_dirs) is not searched either.
 classify_lines() { # $1 = version, $2 = plugin file
 	local v="$1" plugin="$2" ve
 	ve="$(regex_escape "$v")"
@@ -288,6 +347,7 @@ classify_lines() { # $1 = version, $2 = plugin file
 		git grep -n -I -F -e "$v" -- "${PDIR:-.}" \
 			":!${PDIR}node_modules" ":!${PDIR}vendor" ":!${PDIR}dist" ':!*.pot' ':!*.po' ':!*.mo' \
 			':!*package-lock.json' ':!*composer.lock' ':!*.min.js' ':!*.map' ':!*.lock' \
+			${OTHER_EXCLUDES[@]+"${OTHER_EXCLUDES[@]}"} \
 			2>/dev/null || true
 		# the root's own files (glob: * does not cross a /)
 		[ -z "$PDIR" ] || git grep -n -I -F -e "$v" -- ':(glob)*' \
@@ -421,12 +481,14 @@ in_list() { # $1 = item, $2 = comma list
 
 # With a plugin directory only the files in it count (paths relative to it),
 # and a PR that changes none of them is "outside": another plugin of the
-# monorepo, or the repository's own tooling.
+# monorepo, or the repository's own tooling. Files of another plugin below
+# the plugin directory (other_plugin_dirs) do not count either.
 pr_kind() { # $1 = space-separated files (relative to the root)
 	local f rel docs=1 ci=1 inside=0
 	[ -n "$1" ] || { echo code; return; }
 	for f in $1; do
 		rel="$f"
+		if in_other_plugin "$f"; then continue; fi
 		if [ -n "$PDIR" ]; then
 			case "$f" in
 				"$PDIR"*) rel="${f#"$PDIR"}" ;;
@@ -747,17 +809,18 @@ EOF
 	#    With a plugin directory, only its sources and .pot (a pathspec `*` crosses `/`).
 	#    A call may end its line at `__(`: prettier puts a long string on the next line
 	#    (Japanized-for-WooCommerce #330 added two such JS strings and was not counted).
+	#    Another plugin below the plugin directory has its own POT and is left out.
 	calls="(__|_e|_x|_ex|_n|_nx|_n_noop|_nx_noop|esc_html__|esc_html_e|esc_html_x|esc_attr__|esc_attr_e|esc_attr_x)\\([[:space:]]*(['\"]|\$)"
-	strings="$(git diff "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" 2>/dev/null \
+	strings="$(git diff "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" ${OTHER_EXCLUDES[@]+"${OTHER_EXCLUDES[@]}"} 2>/dev/null \
 		| grep -cE "^\+.*[^A-Za-z0-9_]$calls" || true)"
 	if [ "${strings:-0}" -gt 0 ]; then
-		pot_changed="$(git diff --name-only "$since..HEAD" -- "${PDIR}*.pot" 2>/dev/null | head -1 || true)"
+		pot_changed="$(git diff --name-only "$since..HEAD" -- "${PDIR}*.pot" ${OTHER_EXCLUDES[@]+"${OTHER_EXCLUDES[@]}"} 2>/dev/null | head -1 || true)"
 		if [ -n "$pot_changed" ]; then
 			pot_commit="$(git log -1 --format=%H HEAD -- "$pot_changed")"
 			pot_last="$(git log -1 --format='%h %cs' "$pot_commit")"
 			# commits that changed translation calls and are not in the history of the regen
 			late=""
-			for c in $(git log --format=%H -G"(^|[^A-Za-z0-9_])$calls" "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" 2>/dev/null); do
+			for c in $(git log --format=%H -G"(^|[^A-Za-z0-9_])$calls" "$since..HEAD" -- "${PDIR}*.php" "${PDIR}*.js" "${PDIR}*.jsx" "${PDIR}*.ts" "${PDIR}*.tsx" ${OTHER_EXCLUDES[@]+"${OTHER_EXCLUDES[@]}"} 2>/dev/null); do
 				git merge-base --is-ancestor "$c" "$pot_commit" || late="$late ${c:0:7}"
 			done
 			if [ -z "$late" ]; then

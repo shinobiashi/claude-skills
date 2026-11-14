@@ -86,6 +86,9 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 - ディレクトリの中だけが版数の書き換え・readme.txt・package.json・POT の判定・PR の分類の対象になる。
   ルート直下のファイル（開発ツールの package.json、CLAUDE.md）は MENTION として見せるだけで書き換えない。
   ほかのディレクトリ（同じ版数の別のプラグイン）は探さない。そのディレクトリに 1 つもファイルが無い PR は `outside`
+- プラグインのディレクトリの**下に別のプラグイン**があるとき（`Plugin Name:` ヘッダーと、自分と違う `Text Domain:` を持つ PHP があるディレクトリ。
+  Japanized for WooCommerce の `plugins/artws-security-hub/` など）は、そのディレクトリを版数の書き換え・POT の判定・PR の分類から外す
+  （その文字列は自分の POT に入らず、版数も別。それだけを変えた PR は `outside`）。`Text Domain:` が同じか無い入れ子は、自分の POT に入りうるので今までどおり数える
 
 - `detect` は現行版数を含む行を全部見て、**書き換えるべき行（CARRIER）とそうでない行（MENTION）に分ける**。
   `@since x.y.z` の docblock と readme.txt の changelog 見出しは履歴なので対象外（一覧にも出ない）。docblock の
@@ -105,7 +108,7 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 - `tag` は「版数に `v` が付いていない」「作業ツリーがクリーン」「default ブランチ上で HEAD = 本流の先端」「プラグインヘッダー・
   `Stable tag` が <ver>」「changelog 見出しがある」「タグ（`<接頭辞><ver>`）が未存在」をすべて検査し、
   **本流リモート以外への push を拒む**（フォークには SVN の secrets が無く、失敗 run が残るだけ）
-- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（131 件）
+- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（136 件）
 
 ## モード
 

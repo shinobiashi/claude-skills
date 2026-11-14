@@ -641,6 +641,51 @@ run check
 run tag 1.1.0 --dry-run
 [ "$RC" -ne 0 ] && has "has no '= 1\.1\.0"; check "tag refuses when only the Upgrade Notice has the version" $?
 
+# ---- another plugin below the plugin directory ---------------------------
+# Japanized for WooCommerce keeps its server plugin plugins/artws-security-hub/
+# (its own Text Domain) in the repository: its calls are not in this plugin's
+# POT, a PR that changes only it needs no changelog line, and its version is
+# its own. A plugin below with the same Text Domain still counts.
+echo "== nested plugin"
+git init -q --bare "$W/nest.git"
+git clone -q "$W/nest.git" "$W/nest" 2>/dev/null
+cd "$W/nest"
+git config user.email t@example.com
+git config user.name tester
+git checkout -q -b main
+mkdir -p plugins/hub i18n templates/mu
+printf "<?php\n/**\n * Plugin Name: Main\n * Version: 2.0.0\n * Text Domain: main\n */\ndefine( 'MAIN_VERSION', '2.0.0' );\n" > main.php
+printf '=== Main ===\nStable tag: 2.0.0\n\n== Changelog ==\n\n= 2.0.0 - 2026-01-01 =\n* **Added** - First (#1)\n' > readme.txt
+printf '"Project-Id-Version: Main 2.0.0\\n"\n' > i18n/main.pot
+printf "<?php\n/**\n * Plugin Name: Hub\n * Version: 2.0.0\n * Text Domain: hub\n */\ndefine( 'HUB_VERSION', '2.0.0' );\n" > plugins/hub/hub.php
+printf "<?php\n/**\n * Plugin Name: Bundled MU plugin\n * Text Domain: main\n */\n" > templates/mu/mu.php
+git add -A && git commit -q -m init && git push -q origin main 2>/dev/null
+git tag 2.0.0
+run detect --version 2.1.0
+[ "$RC" -eq 0 ] && has "^CARRIER${TAB}main\.php${TAB}7${TAB}" && ! has 'plugins/hub/'; check "nested: detect does not take another plugin's version for a carrier" $?
+
+merge_pr 40 hub-string plugins/hub/class-hub.php "<?php // __( 'Hub string', 'hub' );"; S40="$SHA"
+git push -q origin main 2>/dev/null
+export FAKE_PRS="40${TAB}${S40}${TAB}-${TAB}feat: hub string${TAB}plugins/hub/class-hub.php
+"
+run prs
+has "^40${TAB}outside${TAB}"; check "nested: a PR that changes only another plugin below the plugin directory is outside" $?
+
+git checkout -q -b release/2.1.0 main
+printf '* **Fixed** - Something (#9)\n' > "$W/nest-entries.md"
+"$SCRIPT" bump 2.1.0 --date 2026-02-01 --entries "$W/nest-entries.md" >/dev/null
+grep -q "define( 'MAIN_VERSION', '2.1.0' );" main.php && grep -q "define( 'HUB_VERSION', '2.0.0' );" plugins/hub/hub.php; check "nested: bump leaves another plugin's version alone" $?
+git add -A && git commit -q -m "chore: bump version to 2.1.0 and add changelog"
+git push -q -u origin release/2.1.0 2>/dev/null
+run check
+[ "$RC" -eq 0 ] && has '^OK +no translation calls added' && has '^OK +every code PR'; check "nested: another plugin's call asks for no POT regen and its PR for no changelog line" $?
+printf "<?php\n// __( 'MU string', 'main' );\n" > templates/mu/class-mu.php
+git add -A && git commit -q -m "feat: mu string"
+run check
+has '^WARN +1 added line\(s\) with translation calls.*no \.pot change'; check "nested: a plugin below with the same Text Domain still asks for the POT" $?
+git reset -q --hard HEAD~1
+unset FAKE_PRS
+
 echo ""
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

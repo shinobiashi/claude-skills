@@ -236,6 +236,13 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `release-bump`: プラグインのディレクトリの下にある別のプラグインを、自分のコードとして数えていた。Japanized for WooCommerce 3.1.0 の `check` で、
+  同じリポジトリのサーバー側のプラグイン `plugins/artws-security-hub/`（Text Domain `artws-security-hub`、配布物に入らない）の翻訳呼び出しが
+  「POT を作り直した後に翻訳呼び出しを変えたコミットがある: 6ce0104」の WARN になり、それだけを変えた PR #332 が「changelog に載っていない」の MISSING に
+  なった（`--skip 332` で通した）。`Plugin Name:` ヘッダーと自分と違う `Text Domain:` を持つ PHP があるディレクトリを別のプラグインとし、POT の判定・
+  PR の分類（それだけを変えた PR は `outside`）・版数の書き換えの対象から外す（版数がたまたま同じでも、その `define( '..._VERSION' )` を書き換えない）。
+  `Text Domain:` が同じか無い入れ子（同梱の mu-plugin のひな形など）は、自分の POT に入りうるので今までどおり数える。シナリオテストを 5 件足した（136 件）。
+  直す前のスクリプトでは 5 件とも落ちることを確かめた
 - `dev-cycle`: `request-gate-review.sh` が push の直後に PR の head を読むと、GitHub がまだ push を反映しておらず前のコミットが返ることがある。
   `--ci-only` はその前のコミットの green を見てから head を読み直し、`CI=head-moved` の exit 3 で止まっていた（jp4wc-pro PR #86、2026-11-14。
   最後の記録用コミット 4fdd17b の push の直後に 1292ad7 を読んだ。やり直しで通った）。bot の待ちでも、前のコミットへのレビューを探すことになる。
