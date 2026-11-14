@@ -86,6 +86,19 @@
 #   how long its summary comment has said Running, and past
 #   CODEX_LONG_RUN minutes suggests going on without it, re-reading the
 #   threads right before the next push so that a late review is not missed.
+# - GitHub can take a few seconds to move a PR's head to a commit that was
+#   just pushed. Read right after the push, the head was still the commit
+#   before it: the CI wait saw that commit's green CI, read the head again
+#   and stopped with CI=head-moved (jp4wc-pro PR #86, 2026-11-14: the
+#   --ci-only after the final record commit; the rerun passed), and a bot
+#   wait would match reviews against the old commit. When this checkout is
+#   on the PR's branch, its HEAD is pushed (equal to its upstream) and the
+#   PR's head is an ancestor of it, the PR is only behind the push, and the
+#   script waits up to HEAD_CATCHUP seconds for the PR to show it. Anything
+#   else (unpushed commits, another branch, no checkout) keeps the PR's
+#   head, and so does a PR that never catches up: the push then went
+#   somewhere the PR does not follow, and the PR's head is what CI and the
+#   bots see. Said on stderr.
 #
 # Usage:
 #   request-gate-review.sh <PR> [--copilot-only|--codex-only] [--request-codex]
@@ -254,6 +267,46 @@ slug="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 owner="${slug%%/*}"
 repo="${slug#*/}"
 head_sha="$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')"
+
+# How long to wait for the PR's head to show a push this checkout just made,
+# and the interval between looks (see the note at the top).
+HEAD_CATCHUP=60
+HEAD_STEP=5
+
+# Prints this checkout's HEAD when the PR is only behind it: on the PR's
+# branch, pushed (HEAD equals its upstream), and the PR's head an ancestor
+# of HEAD. Returns 1 otherwise, with nothing printed. The PR's branch is
+# asked last, so a checkout already at the PR's head costs no extra call.
+pushed_head_ahead() {
+	local local_sha upstream branch pr_branch
+	local_sha="$(git rev-parse --verify -q HEAD 2>/dev/null)" || return 1
+	[ -n "$local_sha" ] && [ "$local_sha" != "$head_sha" ] || return 1
+	upstream="$(git rev-parse --verify -q '@{upstream}' 2>/dev/null)" || return 1
+	[ "$upstream" = "$local_sha" ] || return 1
+	git merge-base --is-ancestor "$head_sha" "$local_sha" 2>/dev/null || return 1
+	branch="$(git symbolic-ref --short -q HEAD 2>/dev/null)" || return 1
+	pr_branch="$(gh pr view "$pr" --json headRefName --jq '.headRefName' 2>/dev/null)" || return 1
+	[ -n "$branch" ] && [ "$branch" = "$pr_branch" ] || return 1
+	echo "$local_sha"
+}
+
+pushed_sha="$(pushed_head_ahead)" || pushed_sha=""
+if [ -n "$pushed_sha" ]; then
+	echo "request-gate-review: PR #$pr still shows ${head_sha:0:7}, behind the pushed HEAD ${pushed_sha:0:7} — waiting up to ${HEAD_CATCHUP}s for GitHub to take the push"
+	catchup_waited=0
+	while [ "$catchup_waited" -lt "$HEAD_CATCHUP" ]; do
+		sleep "$HEAD_STEP"
+		catchup_waited=$((catchup_waited + HEAD_STEP))
+		if [ "$(gh pr view "$pr" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)" = "$pushed_sha" ]; then
+			head_sha="$pushed_sha"
+			echo "request-gate-review: PR #$pr shows ${head_sha:0:7} now (after ${catchup_waited}s)"
+			break
+		fi
+	done
+	if [ "$head_sha" != "$pushed_sha" ]; then
+		echo "request-gate-review: PR #$pr still shows ${head_sha:0:7} after ${HEAD_CATCHUP}s, not the pushed HEAD ${pushed_sha:0:7} — going on with the PR's head (does this branch's upstream feed the PR?)" >&2
+	fi
+fi
 
 # CI wait: poll interval, and how long a PR may show neither a workflow run
 # nor a check before that counts as "CI did not start" (a push takes a few

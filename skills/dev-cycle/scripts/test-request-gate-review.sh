@@ -5,6 +5,8 @@
 set -uo pipefail
 
 SCRIPT="${1:-$(cd "$(dirname "$0")" && pwd)/request-gate-review.sh}"
+# Absolute, since the head catch-up scenarios run from a scratch repository.
+SCRIPT="$(cd "$(dirname "$SCRIPT")" && pwd)/$(basename "$SCRIPT")"
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 PASS=0
@@ -70,7 +72,9 @@ EOS
 #   FAKE_REVIEWS_AT        time: Copilot and Codex reviews of FAKE_HEAD exist from the start, submitted then
 #   FAKE_REVIEWS_BEFORE_T  1: Copilot and Codex reviews of FAKE_HEAD exist, submitted before T
 #                          (the previous round's reviews when a round is asked again on the same head)
-#   FAKE_HEAD_MOVES_TO     sha: from the 2nd `gh pr view` on, the PR head is this (a push during the wait)
+#   FAKE_HEAD_MOVES_TO     sha: from the 2nd `gh pr view` on, the PR head is this (a push during the wait,
+#                          or GitHub taking a push the PR did not show yet)
+#   FAKE_BRANCH            the PR's head branch (`gh pr view --json headRefName`; default feat/x)
 cat > "$W/bin/gh" <<'EOS'
 #!/usr/bin/env bash
 S="$FAKE_STATE"
@@ -82,7 +86,10 @@ register() { touch "$S/pending"; now > "$S/event"; }
 case "$1 $2" in
 	"repo view") echo "o/r"; exit 0 ;;
 	"pr view")
-		case "$*" in *mergeable*) echo "${FAKE_MERGEABLE:-MERGEABLE}"; exit 0 ;; esac
+		case "$*" in
+			*mergeable*) echo "${FAKE_MERGEABLE:-MERGEABLE}"; exit 0 ;;
+			*headRefName*) log "pr view headRefName"; echo "${FAKE_BRANCH:-feat/x}"; exit 0 ;;
+		esac
 		n="$(count prview)"
 		if [ -n "${FAKE_HEAD_MOVES_TO:-}" ] && [ "$n" -ge 2 ]; then echo "$FAKE_HEAD_MOVES_TO"; else echo "$FAKE_HEAD"; fi
 		exit 0 ;;
@@ -578,6 +585,64 @@ echo "== T defaults to now when --since is absent"
 FAKE_EDIT_REGISTERS=1 FAKE_COPILOT_AFTER=1 run 5 --copilot-only --timeout 5
 iso_t() { echo "$OUT" | grep -Eq '^T=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; }
 check "T printed in ISO 8601 UTC" iso_t
+
+# A real checkout for the head catch-up: branch feat/x with commits A and B,
+# B pushed to a bare origin (so HEAD equals its upstream).
+TOP="$PWD"
+R="$W/repo"
+G() { git -C "$R" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+git init -q --bare "$W/origin.git"
+git init -q -b feat/x "$R"
+G commit -q --allow-empty -m a
+A="$(G rev-parse HEAD)"
+G commit -q --allow-empty -m b
+B="$(G rev-parse HEAD)"
+G remote add origin "$W/origin.git"
+G push -q -u origin feat/x
+cd "$R" || exit 1
+
+echo "== the PR head lags the push this checkout just made: wait for it (jp4wc-pro PR #86)"
+FAKE_HEAD="$A" FAKE_HEAD_MOVES_TO="$B" FAKE_RUNS=pass run 5 --ci-only
+check "lag: exit 0" rc_is 0
+check "lag: CI=passed" has "^CI=passed$"
+check "lag: not head-moved" hasnt "head-moved"
+check "lag: says the PR is behind the pushed HEAD" has "behind the pushed HEAD ${B:0:7}"
+check "lag: the CI wait follows the pushed HEAD" has "(head ${B:0:7})"
+check "lag: one 5s look" call_count "^sleep 5$" 1
+
+echo "== the PR head never takes the push: bounded, then the PR's own head"
+FAKE_HEAD="$A" FAKE_RUNS=pass run 5 --ci-only
+check "never: exit 0" rc_is 0
+check "never: says it goes on with the PR's head" has "going on with the PR's head"
+check "never: bounded (12 x 5s)" call_count "^sleep 5$" 12
+check "never: the CI wait is on the PR's head" has "(head ${A:0:7})"
+
+echo "== the PR head is the checkout's HEAD: nothing to wait for"
+FAKE_HEAD="$B" FAKE_RUNS=pass run 5 --ci-only
+check "in step: exit 0" rc_is 0
+check "in step: no catch-up wait" not_called "^sleep 5$"
+check "in step: the PR's branch is not even asked" not_called "headRefName"
+
+echo "== the checkout is on another branch than the PR's: no wait"
+FAKE_HEAD="$A" FAKE_BRANCH=feat/other FAKE_RUNS=pass run 5 --ci-only
+check "other branch: exit 0" rc_is 0
+check "other branch: no catch-up wait" not_called "^sleep 5$"
+check "other branch: the CI wait is on the PR's head" has "(head ${A:0:7})"
+
+echo "== the PR's head is a commit this checkout does not have (pushed from elsewhere): no wait"
+FAKE_HEAD="$OLD" FAKE_RUNS=pass run 5 --ci-only
+check "unknown head: exit 0" rc_is 0
+check "unknown head: no catch-up wait" not_called "^sleep 5$"
+check "unknown head: the CI wait is on the PR's head" has "(head ${OLD:0:7})"
+
+echo "== the checkout has a commit it has not pushed: no wait"
+G commit -q --allow-empty -m c
+FAKE_HEAD="$B" FAKE_RUNS=pass run 5 --ci-only
+check "unpushed: exit 0" rc_is 0
+check "unpushed: no catch-up wait" not_called "^sleep 5$"
+check "unpushed: the PR's branch is not even asked" not_called "headRefName"
+check "unpushed: the CI wait is on the PR's head" has "(head ${B:0:7})"
+cd "$TOP" || exit 1
 
 echo
 echo "passed=$PASS failed=$FAIL"

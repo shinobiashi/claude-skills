@@ -376,7 +376,9 @@ Bash `run_in_background`、**timeout 1800000ms**(依頼と登録確認が最大�
   死んだとき(ランナー・ネットワーク・イメージビルド)の `gh run rerun <id> --failed` を出す。180 秒たっても run も check も
   現れない時も exit 3(`CI=none`)。PR が base と衝突していると GitHub は `pull_request` の workflow を走らせないので、その時は衝突だと出す
   (`CI=none` を「docs だけのコミットだから」と読まない。epsilon-for-woocommerce PR #19 では最後の記録用コミットの `CI=none` をそう読み、衝突に気づかなかった)。待っている間に PR の head が変わったら `CI=head-moved` の exit 3(新しい head で
-  やり直す)。jp4wc-rakusync PR #14 では依頼の前の CI 待ちの until ループを 1 PR で 5 回、saai-signal-mail PR #8 では
+  やり直す)。push の直後で PR の head がまだ前のコミットのときは、チェックアウトが PR のブランチにいて HEAD が push 済みで、
+  PR の head がその祖先なら、最大 60 秒 PR が追いつくのを待ってから始める(以前は前のコミットの green を見て `head-moved` で止まった。
+  jp4wc-pro PR #86 の最後の記録用コミット)。60 秒で追いつかなければ、その旨を出して PR の head のまま進む。jp4wc-rakusync PR #14 では依頼の前の CI 待ちの until ループを 1 PR で 5 回、saai-signal-mail PR #8 では
   6 回手書きしていた
 - 最後に bot ごとの状態行 `COPILOT=responded|timeout|unregistered|not-waited` /
   `CODEX=responded|timeout|request-failed|not-waited` と `CI=passed|failed|none|timeout|not-waited` を出し、成功時だけ `DONE` を出す。同時依頼で片方だけ
