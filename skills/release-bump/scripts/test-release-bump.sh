@@ -684,6 +684,44 @@ git add -A && git commit -q -m "feat: mu string"
 run check
 has '^WARN +1 added line\(s\) with translation calls.*no \.pot change'; check "nested: a plugin below with the same Text Domain still asks for the POT" $?
 git reset -q --hard HEAD~1
+
+# ---- readme section lengths (WordPress.org word limits) ------------------
+# The WordPress.org parser cuts the changelog and the FAQ past 5000 words and
+# every other section past 2500 (Japanized for WooCommerce 3.1.0: changelog
+# 5822 words, cut inside 2.9.10 with its "Earlier versions" link).
+echo "== readme length"
+words() { awk -v n="$1" 'BEGIN { for (i = 1; i <= n; i++) printf "w%d%s", i, (i % 20 ? " " : "\n"); print "" }'; }
+run check
+[ "$RC" -eq 0 ] && has '^OK +readme sections within the WordPress\.org word limits: changelog 20/5000$'; check "length: a short changelog is reported with its count" $?
+{ printf '\n= 1.0.0 - 2025-01-01 =\n'; words 4475; } >> readme.txt
+run check
+[ "$RC" -eq 0 ] && ! has '^WARN +readme' && has 'changelog 4500/5000'; check "length: 4500 words is not a warning yet" $?
+words 1 >> readme.txt
+run check
+[ "$RC" -eq 0 ] && has '^WARN +readme\.txt changelog: 4501 words, near the WordPress\.org limit of 5000' && ! has '^OK +readme'; check "length: past 90% (4501 words) the changelog is warned, without failing the check" $?
+words 499 >> readme.txt
+run check
+[ "$RC" -eq 0 ] && has '^WARN +readme\.txt changelog: 5000 words, near'; check "length: exactly 5000 words is not cut (the parser keeps up to the limit)" $?
+words 1 >> readme.txt
+run check
+[ "$RC" -eq 0 ] && has '^WARN +readme\.txt changelog: 5001 words, past the WordPress\.org limit of 5000 .*Earlier versions'; check "length: 5001 words is past the limit and says how to fix it" $?
+git checkout -q -- readme.txt
+{ printf '\n== Frequently Asked Questions ==\n\n= A question? =\n'; words 3000; } >> readme.txt
+run check
+! has '^WARN +readme' && has 'faq 3004/5000'; check "length: 'Frequently Asked Questions' is the faq section, limited to 5000" $?
+git checkout -q -- readme.txt
+{ printf '\n== Upgrade Notice ==\n\n= 2.1.0 =\n'; words 6000; } >> readme.txt
+run check
+! has '^WARN +readme' && ! has 'upgrade'; check "length: the Upgrade Notice has no limit" $?
+git checkout -q -- readme.txt
+{ printf '\n== Description ==\n\n'; words 1200; printf '\n== Developer notes ==\n\n'; words 1100; } >> readme.txt
+run check
+has '^WARN +readme\.txt description: 2302 words, near the WordPress\.org limit of 2500'; check "length: an unknown section (with its title) counts toward the description" $?
+git checkout -q -- readme.txt
+{ printf '\n## Screenshots\n\n'; words 2600; printf '\n### Not a section\n'; } >> readme.txt
+run check
+has '^WARN +readme\.txt screenshots: 2604 words, past the WordPress\.org limit of 2500 .*shorten it'; check "length: a '## ' header starts a section, a '### ' line does not" $?
+git checkout -q -- readme.txt
 unset FAKE_PRS
 
 echo ""

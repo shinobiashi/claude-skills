@@ -424,6 +424,47 @@ changelog_heading() { # $1 = version; its first changelog heading, empty when th
 	changelog_section | grep -E "^= $(regex_escape "$1")( |$)" | head -1 || true
 }
 
+# Words per readme section, as the WordPress.org readme parser counts them
+# (plugin-directory/readme/class-parser.php): a section starts at a line that
+# begins with '==' or '##' (not '###'); its name is the title in lower case with
+# '_' for spaces (aliases: frequently_asked_questions -> faq, change_log ->
+# changelog, screenshot -> screenshots); an unknown section goes to other_notes
+# with its title (as <h3>), and other_notes is appended to the description. A
+# word is a run of non-whitespace. Past the limit (changelog and faq 5000,
+# every other section 2500; the Upgrade Notice is not limited) the parser cuts
+# the section and the plugin page shows it cut, with an import warning that only
+# the committers see (Japanized for WooCommerce 3.1.0: changelog 5822 words).
+# Prints "<section> <words> <limit>" per section that has words.
+readme_section_words() {
+	awk '
+		BEGIN {
+			split("description installation faq screenshots changelog upgrade_notice other_notes", e, " ")
+			for (i in e) expected[e[i]] = 1
+			alias["frequently_asked_questions"] = "faq"; alias["change_log"] = "changelog"; alias["screenshot"] = "screenshots"
+		}
+		{
+			t = $0; gsub(/^[ \t\r]+|[ \t\r]+$/, "", t)
+			if (t == "") next
+			if (!named) { named = 1; next }   # the === Plugin Name === line
+			if (t ~ /^==/ || (t ~ /^##/ && t !~ /^###/)) {
+				title = t; gsub(/^[#= \t]+|[#= \t]+$/, "", title)
+				name = tolower(title); gsub(/ /, "_", name)
+				if (name in alias) name = alias[name]
+				if (!(name in expected)) { name = "other_notes"; words[name] += split(title, w, "[ \t]+") }
+				insec = 1; next
+			}
+			if (insec) words[name] += NF
+		}
+		END {
+			words["description"] += words["other_notes"]
+			n = split("description installation faq screenshots changelog", s, " ")
+			for (i = 1; i <= n; i++) {
+				if (!(words[s[i]] > 0)) continue
+				print s[i], words[s[i]], (s[i] == "changelog" || s[i] == "faq") ? 5000 : 2500
+			}
+		}' "$README"
+}
+
 # --- detect ----------------------------------------------------------------
 
 cmd_detect() {
@@ -720,7 +761,7 @@ cmd_add_entries() {
 cmd_check() {
 	local since="" skip="" status=0 remote branch version carriers n behind cur
 	local heading missing unref strings pot_changed pot_last number kind sha issues ref title
-	local calls pot_commit late c
+	local calls pot_commit late c sizes long sec words limit
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--since) since="$2"; shift 2 ;;
@@ -770,6 +811,35 @@ cmd_check() {
 		else
 			echo "OK       heading: $heading"
 		fi
+	fi
+
+	# 2b. section lengths against the WordPress.org limits. The plugin page is built
+	#     from the Stable tag's readme, so a cut section stays cut until the next tag:
+	#     warn from 90% (changelog 4500 words; a release adds about 500-700 there).
+	if [ -f "$README" ]; then
+		sizes=""; long=0
+		while read -r sec words limit; do
+			[ -n "$sec" ] || continue
+			sizes="$sizes $sec $words/$limit"
+			if [ "$words" -gt "$limit" ]; then
+				long=1
+				if [ "$sec" = changelog ]; then
+					echo "WARN     $README changelog: $words words, past the WordPress.org limit of $limit — the plugin page cuts it off; move the oldest version blocks out (keep them where an 'Earlier versions' link points)"
+				else
+					echo "WARN     $README $sec: $words words, past the WordPress.org limit of $limit — the plugin page cuts it off; shorten it"
+				fi
+			elif [ "$words" -gt $((limit * 9 / 10)) ]; then
+				long=1
+				if [ "$sec" = changelog ]; then
+					echo "WARN     $README changelog: $words words, near the WordPress.org limit of $limit — move the oldest version blocks out before a release passes it"
+				else
+					echo "WARN     $README $sec: $words words, near the WordPress.org limit of $limit — shorten it before it passes"
+				fi
+			fi
+		done <<EOF
+$(readme_section_words)
+EOF
+		[ $long = 1 ] || [ -z "$sizes" ] || echo "OK       readme sections within the WordPress.org word limits:$sizes"
 	fi
 
 	# 3. every code PR since the previous tag is referenced in the newest block

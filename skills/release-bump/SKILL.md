@@ -108,7 +108,10 @@ R=<Base directory for this skill>/scripts/release-bump.sh
 - `tag` は「版数に `v` が付いていない」「作業ツリーがクリーン」「default ブランチ上で HEAD = 本流の先端」「プラグインヘッダー・
   `Stable tag` が <ver>」「changelog 見出しがある」「タグ（`<接頭辞><ver>`）が未存在」をすべて検査し、
   **本流リモート以外への push を拒む**（フォークには SVN の secrets が無く、失敗 run が残るだけ）
-- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（136 件）
+- `check` は readme.txt の各セクションの語数を、WordPress.org の readme パーサー（`plugin-directory/readme/class-parser.php`）と同じ数え方で数える。
+  上限は changelog と FAQ が 5,000 語、それ以外のセクションが 2,500 語（Upgrade Notice は無制限。知らない見出しのセクションは Description に足される）。
+  上限の 90%（changelog なら 4,500 語）を超えると WARN を出す。WARN なので `check` の exit は変わらない
+- bash 3.2 / BSD awk で動く（Ubuntu の bash 5・mawk でも確認）。`bash scripts/test-release-bump.sh` でシナリオテスト（145 件）
 
 ## モード
 
@@ -176,6 +179,7 @@ release ブランチの worktree（または release ブランチ上）で `chec
 | `BEHIND n` | main が先に進んでいる | `sync` |
 | `WARN translation calls` | 前タグ以降に翻訳呼び出しが増えたのに、HEAD の `.pot` が変わっていない、または作り直した後に翻訳呼び出しを変えたコミットがある（sha を列挙） | POT 再生成（別コミット）。作り直し済みで全コミットがその前なら `OK` になる。判定は HEAD（release ブランチ）で行うので、main にまだ無い再生成コミットも数える |
 | `WARN heading` | 見出しが `= x.y.z - YYYY-MM-DD =` でも `= x.y.z =` でもない | デプロイ workflow の抽出に合わせて直す |
+| `WARN readme.txt <section>: n words, near / past the WordPress.org limit` | セクションの語数が上限の 90% を超えた（near）、または上限を超えた（past）。上限を超えると wordpress.org がそのセクションを途中で切って表示し、コミッターだけに見える取り込み警告を出す | changelog なら古いバージョンのブロックを readme から外し、移した先（プラグインのサイトの変更履歴ページ、`changelog.txt` など）を `= Earlier versions =` からリンクする。外す前に、移した先にそのブロックがあることを確かめる。readme の変更は配布物の変更なので PR で行う。ほかのセクションは文を短くする |
 
 `DONE` で exit 0 なら「マージできる状態」。マージは人間が行う（`gh pr merge` を代行しない）。
 
@@ -242,3 +246,7 @@ release ブランチの worktree（または release ブランチ上）で `chec
   必ず release ブランチの PR 経由
 - **`Tested up to` は別判断**: 版数と一緒に上げるかどうかは、そのバージョンで実際にテストしたかによる。上げる時は
   readme.txt とプラグインヘッダー（`WC tested up to` も）の両方
+- **changelog の語数は wordpress.org に切られる前に減らす**: プラグインページは Stable tag の readme.txt から作られる。そのため、
+  切られたセクションは次のタグまで切れたまま表示される（SVN でタグの readme を手で直せば別）。Japanized for WooCommerce 3.1.0 は
+  changelog が 5,822 語あり、2.9.10 の途中から後ろと「Earlier versions」のリンクが表示されなかった。1 回のリリースで 500〜700 語増えるので、
+  `check` の near の WARN が出た時点で、古いブロックを外す PR を次の版に入れる

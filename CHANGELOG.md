@@ -236,6 +236,17 @@
   既存のスクリプトと手順（`gate-threads.sh`、`request-gate-review.sh`、手書きの `git push`）はそのまま使える（追加のみ）
 
 ### Fixed
+- `release-bump`: `check` が readme.txt の各セクションの語数を見ていなかった。WordPress.org は changelog と FAQ を 5,000 語、それ以外のセクションを
+  2,500 語で切って表示し、コミッターだけに見える取り込み警告を出す。Japanized for WooCommerce 3.1.0 は changelog が 5,822 語あり、公開後に
+  "The Changelog section is too long and was truncated." の警告が出た。2.9.10 の途中から後ろと「Earlier versions」のリンクは表示されなかった。
+  プラグインページは Stable tag の readme から作られるので、気づいたときには次のタグまで直せない。
+  `check` の手順 2b で readme パーサー（`plugin-directory/readme/class-parser.php` の `trim_length()`）と同じ数え方で語数を数えるようにした。
+  見出しは `==` か `##`（`###` は除く）、別名（`frequently_asked_questions` → faq など）、知らない見出しは Description に足す、Upgrade Notice は無制限。
+  上限の 90%（changelog なら 4,500 語）を超えると `WARN … near`、上限を超えると `WARN … past` を出す。5,000 語ちょうどは切られず 5,001 語から
+  切られることを、パーサーと同じ `preg_split` で確かめた。3.1.0 の readme で 5,822 語（Python で数えた値と一致）、mawk でも同じ値になる。
+  シナリオテスト 136 → 145 件。追加したテストのうち肯定の 8 件は、修正前のスクリプトで落ちることを確かめた
+  （残る 1 件「Upgrade Notice は数えない」は、何も出ないことを確かめる否定のテスト）。
+  背景: Japanized for WooCommerce 3.1.0 の公開後の警告（ユーザー指示 2026-11-16）
 - `release-bump`: プラグインのディレクトリの下にある別のプラグインを、自分のコードとして数えていた。Japanized for WooCommerce 3.1.0 の `check` で、
   同じリポジトリのサーバー側のプラグイン `plugins/artws-security-hub/`（Text Domain `artws-security-hub`、配布物に入らない）の翻訳呼び出しが
   「POT を作り直した後に翻訳呼び出しを変えたコミットがある: 6ce0104」の WARN になり、それだけを変えた PR #332 が「changelog に載っていない」の MISSING に
