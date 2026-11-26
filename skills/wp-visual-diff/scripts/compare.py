@@ -5,8 +5,9 @@ Usage:
   compare.py BEFORE.json AFTER.json [--tolerance 0.5] [--allow-broken] [--allow-same-dom] [--no-pixels]
 
 Checks, in order:
-  1. Preconditions on both runs (exit 2 when broken): the same pages were measured, each page
-     ended on the same path in both runs (a redirect in one run means two different pages),
+  1. Preconditions on both runs (exit 2 when broken): the same pages were measured (the same
+     keys, each with the same requested path and query apart from the vdiff cache buster), each
+     page ended on the same path in both runs (a redirect in one run means two different pages),
      every page answered HTTP < 400, none is WordPress's 404 template, every image loaded (a
      page whose images 404 is already broken, and comparing two broken pages says nothing;
      --allow-broken to compare anyway), and every screenshot exists unless --no-pixels (a
@@ -26,11 +27,22 @@ import argparse
 import json
 import os
 import sys
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 
 def load(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def requested(page):
+    """The requested path and query, without measure.js's vdiff cache buster (it differs per run).
+
+    The query matters: /?p=12 and /?p=13 both end on the path /.
+    """
+    parts = urlsplit(page.get("url", ""))
+    query = urlencode(sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "vdiff"))
+    return parts.path + (f"?{query}" if query else "")
 
 
 def preconditions(run, label, allow_broken):
@@ -131,6 +143,9 @@ def main(argv=None):
     if missing:
         problems.append(f"pages measured in only one run: {', '.join(missing)}")
     for key in sorted(set(before["pages"]) & set(after["pages"])):
+        req_b, req_a = requested(before["pages"][key]), requested(after["pages"][key])
+        if req_b != req_a:
+            problems.append(f"{key}: the runs measured different URLs ({req_b} -> {req_a})")
         path_b, path_a = before["pages"][key].get("finalPath"), after["pages"][key].get("finalPath")
         if path_b != path_a:
             problems.append(f"{key}: the runs ended on different pages ({path_b} -> {path_a}; a redirect in one of them)")

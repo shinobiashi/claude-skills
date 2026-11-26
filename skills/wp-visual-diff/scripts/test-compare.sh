@@ -86,6 +86,13 @@ make redirected "run['pages']['top@390']['finalPath'] = '/shop/'; run['pages']['
 run "$W/before.json" "$W/redirected.json" --no-pixels
 status "a page that ended on a different path in one run makes the comparison invalid" 2
 has "names both paths" "top@390: the runs ended on different pages (/ -> /shop/"
+make otherurl "run['pages']['top@390']['url'] = 'http://localhost:8881/?p=13&vdiff=y'; run['pages']['top@390']['fingerprint']['imgs'] = 'f2'"
+run "$W/before.json" "$W/otherurl.json" --no-pixels
+status "a page key measured at a different URL (same final path) makes the comparison invalid" 2
+has "names both URLs" "top@390: the runs measured different URLs (/ -> /?p=13)"
+make bust "for p in run['pages'].values(): p['url'] = 'http://localhost:8881/?vdiff=after-1764160000'; p['fingerprint']['imgs'] = 'f2'"
+run "$W/before.json" "$W/bust.json" --no-pixels
+status "the vdiff cache buster alone is not a different URL" 0
 
 # The synthetic runs have no screenshots: without --no-pixels nothing could check the pixels.
 run "$W/before.json" "$W/after.json"
