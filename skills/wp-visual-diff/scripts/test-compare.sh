@@ -25,7 +25,7 @@ def page(fp="f1"):
             "title": "Top", "height": 3000, "broken": [], "fingerprint": {"imgs": fp, "css": "c1"},
             "imgs": [{"src": "hero.webp", "current": "hero.webp", "w": 1280, "h": 520, "x": 0, "y": 136, "loaded": True},
                      {"src": "card.webp", "current": "card.webp", "w": 540, "h": 338, "x": 80, "y": 900, "loaded": True}]}
-run = {"label": out.split("/")[-1][:-5], "dpr": 1, "pages": {"top@1280": page(), "top@390": page()}}
+run = {"label": out.split("/")[-1][:-5], "base": "http://localhost:8881", "dpr": 1, "pages": {"top@1280": page(), "top@390": page()}}
 exec(edit)
 json.dump(run, open(out, "w"))
 PY
@@ -89,10 +89,27 @@ has "names both paths" "top@390: the runs ended on different pages (/ -> /shop/"
 make otherurl "run['pages']['top@390']['url'] = 'http://localhost:8881/?p=13&vdiff=y'; run['pages']['top@390']['fingerprint']['imgs'] = 'f2'"
 run "$W/before.json" "$W/otherurl.json" --no-pixels
 status "a page key measured at a different URL (same final path) makes the comparison invalid" 2
-has "names both URLs" "top@390: the runs measured different URLs (/ -> /?p=13)"
+has "names both URLs" "top@390: the runs measured different URLs (http://localhost:8881/ -> http://localhost:8881/?p=13)"
 make bust "for p in run['pages'].values(): p['url'] = 'http://localhost:8881/?vdiff=after-1764160000'; p['fingerprint']['imgs'] = 'f2'"
 run "$W/before.json" "$W/bust.json" --no-pixels
 status "the vdiff cache buster alone is not a different URL" 0
+
+make otherbase "run['base'] = 'http://localhost:8882'; [p.update(url='http://localhost:8882/?vdiff=y') for p in run['pages'].values()]"
+run "$W/before.json" "$W/otherbase.json" --no-pixels
+status "runs of different sites make the comparison invalid" 2
+has "names both sites" "the runs measured different sites (http://localhost:8881 -> http://localhost:8882)"
+make dpr2 "run['dpr'] = 2; run['pages']['top@390']['fingerprint']['imgs'] = 'f2'"
+run "$W/before.json" "$W/dpr2.json" --no-pixels
+status "runs at different device pixel ratios make the comparison invalid" 2
+has "names both ratios" "the runs used different device pixel ratios (1 -> 2)"
+make final12 "[p.update(finalUrl='http://localhost:8881/?p=12&vdiff=before-1') for p in run['pages'].values()]"
+make final13 "[p.update(finalUrl='http://localhost:8881/?p=13&vdiff=after-2', fingerprint={'imgs': 'f2', 'css': 'c1'}) for p in run['pages'].values()]"
+run "$W/final12.json" "$W/final13.json" --no-pixels
+status "pages that ended on URLs differing only in the query make the comparison invalid" 2
+has "names both final URLs" "the runs ended on different pages (http://localhost:8881/?p=12 -> http://localhost:8881/?p=13"
+make final12b "[p.update(finalUrl='http://localhost:8881/?vdiff=after-3&p=12', fingerprint={'imgs': 'f2', 'css': 'c1'}) for p in run['pages'].values()]"
+run "$W/final12.json" "$W/final12b.json" --no-pixels
+status "final URLs differing only in vdiff (and query order) are the same page" 0
 
 # The synthetic runs have no screenshots: without --no-pixels nothing could check the pixels.
 run "$W/before.json" "$W/after.json"

@@ -9,17 +9,21 @@
 #
 # The swapped set is every file that differs between <ref> and the working tree under the
 # pathspecs (modified files get the ref's content, files missing at the ref are moved aside,
-# files deleted since the ref come back), plus untracked files under them (moved aside).
-# Files with uncommitted changes (including untracked files) are refused unless --allow-dirty;
-# with it they are backed up and restored exactly. Symbolic links in the set (in the working
-# tree or at the ref) are refused, since they would come back as regular files: narrow --path
-# to leave them out. The backup directory is printed first and exported as SWAP_RUN_BACKUP, so
-# it can be recovered by hand if the process is killed with -9. If a file cannot be swapped,
-# everything is restored and the command is not run.
+# files deleted since the ref come back), plus untracked files under them that are not ignored
+# (moved aside). Ignored files (build output, node_modules) are not swapped: they are listed in
+# a warning and stay as they are, so build output of the working tree is what a "before" run
+# reads. Names are read NUL-delimited (日本語.php is swapped as is); a name with a tab or a
+# newline is refused. Files with uncommitted changes (including untracked files) are refused
+# unless --allow-dirty; with it they are backed up and restored exactly. Symbolic links in the
+# set (in the working tree or at the ref) are refused, since they would come back as regular
+# files: narrow --path to leave them out. The backup directory is printed first and exported
+# as SWAP_RUN_BACKUP, so it can be recovered by hand if the process is killed with -9. If a
+# file cannot be swapped, everything is restored and the command is not run.
 #
-# Exit: the command's exit status; 2 usage error, unknown ref, nothing differs, dirty files or
-# symbolic links refused, or a file could not be swapped (restored, the command not run);
-# 3 the files could not be restored exactly (the backup is kept); 130/143 interrupted.
+# Exit: the command's exit status; 2 usage error, unknown ref, nothing differs, dirty files,
+# symbolic links or names with a tab or newline refused, or a file could not be swapped
+# (restored, the command not run); 3 the files could not be restored exactly (the backup is
+# kept); 130/143 interrupted.
 set -uo pipefail
 
 REF=""
@@ -32,7 +36,7 @@ while [ $# -gt 0 ]; do
 	--path) [ $# -ge 2 ] || { echo "swap-run: --path needs a value" >&2; exit 2; }; PATHS+=("$2"); shift 2 ;;
 	--repo) [ $# -ge 2 ] || { echo "swap-run: --repo needs a value" >&2; exit 2; }; REPO="$2"; shift 2 ;;
 	--allow-dirty) ALLOW_DIRTY=1; shift ;;
-	-h | --help) sed -n '2,22p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,26p' "$0"; exit 0 ;;
 	--) shift; break ;;
 	*) echo "swap-run: unknown argument $1 (put the command after --)" >&2; exit 2 ;;
 	esac
@@ -47,17 +51,28 @@ git rev-parse --verify --quiet "${REF}^{commit}" >/dev/null || { echo "swap-run:
 
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 
+# NUL-delimited: without -z, git quotes and escapes non-ASCII names ("theme/\346\227\245...")
+# and the quoted string names no file, so it would silently stay unswapped.
 FILES=()
-while IFS= read -r f; do [ -n "$f" ] && FILES+=("$f"); done < <(
+while IFS= read -r -d '' f; do [ -n "$f" ] && FILES+=("$f"); done < <(
 	{
-		git diff --no-renames --name-only "$REF" -- ${PATHS[@]+"${PATHS[@]}"}
-		git ls-files --others --exclude-standard -- ${PATHS[@]+"${PATHS[@]}"}
-	} | sort -u
+		git diff -z --no-renames --name-only "$REF" -- ${PATHS[@]+"${PATHS[@]}"}
+		git ls-files -z --others --exclude-standard -- ${PATHS[@]+"${PATHS[@]}"}
+	} | sort -zu
 )
 if [ ${#FILES[@]} -eq 0 ]; then
 	echo "swap-run: no file under ${PATHS[*]:-the repository} differs from $REF — nothing to swap" >&2
 	exit 2
 fi
+for f in "${FILES[@]}"; do
+	case "$f" in
+	*$'\t'* | *$'\n'*)
+		# The backup manifest is one tab-separated line per file.
+		echo "swap-run: a file name with a tab or a newline cannot be swapped: $(printf '%q' "$f") — narrow --path to leave it out" >&2
+		exit 2
+		;;
+	esac
+done
 
 DIRTY=()
 for f in "${FILES[@]}"; do
@@ -81,6 +96,18 @@ if [ ${#LINKS[@]} -gt 0 ]; then
 	printf '   %s\n' "${LINKS[@]}" >&2
 	echo "   narrow --path to leave them out" >&2
 	exit 2
+fi
+
+# Ignored files are not swapped: moving node_modules aside is not workable, and this script
+# cannot build the ref's CSS/JS. Say so, since built files from the working tree would mix the
+# after state into a "before" run.
+IGNORED=()
+while IFS= read -r -d '' f; do IGNORED+=("$f"); done < <(git ls-files -z --others --ignored --exclude-standard --directory -- ${PATHS[@]+"${PATHS[@]}"})
+if [ ${#IGNORED[@]} -gt 0 ]; then
+	echo "swap-run: warning: ${#IGNORED[@]} ignored path(s) under ${PATHS[*]:-the repository} are not swapped and stay as they are:" >&2
+	printf '   %s\n' "${IGNORED[@]:0:10}" >&2
+	[ ${#IGNORED[@]} -gt 10 ] && echo "   ..." >&2
+	echo "   if one is build output (CSS/JS built from the swapped sources), the command reads the working tree's build" >&2
 fi
 
 BK="$(mktemp -d "${TMPDIR:-/tmp}/swap-run.XXXXXX")" || exit 2

@@ -141,6 +141,29 @@ run --ref links -- true
 status "a symbolic link at the ref is refused" 2
 eq "the working tree is clean after the refusal" "$(cd "$R" && git status --porcelain)" ""
 
+# Non-ASCII names: git quotes them unless asked for NUL-delimited output.
+(cd "$R" && git switch -qc names feature && echo jp-v1 >theme/日本語.php && git add -A && git commit -qm jp1 && echo jp-v2 >theme/日本語.php && git commit -qam jp2)
+run --ref names~1 -- sh -c "cat theme/日本語.php >$W/seen-jp"
+status "a non-ASCII file name: exit 0" 0
+eq "the command sees the ref's version of 日本語.php" "$(cat "$W/seen-jp" 2>/dev/null)" "jp-v1"
+eq "日本語.php is restored" "$(content theme/日本語.php)" "jp-v2"
+(cd "$R" && printf 'x\n' >"theme/a$(printf '\t')b.php" && git add -A && git commit -qm tab)
+rm -f "$W/ran"
+run --ref names~2 -- sh -c "touch $W/ran"
+status "a file name with a tab is refused" 2
+if [ -e "$W/ran" ]; then bad "the command is not run when a name is refused"; else ok "the command is not run when a name is refused"; fi
+(cd "$R" && git switch -q feature)
+
+# Ignored files are not swapped; they are named in a warning so a stale build is noticed.
+mkdir -p "$R/theme/build"
+echo built-after >"$R/theme/build/style.css"
+echo 'build/' >>"$R/.git/info/exclude"
+run --ref main --path theme -- sh -c "cat theme/build/style.css >$W/seen-build"
+status "ignored files under the path do not stop the run" 0
+case "$OUT" in *"ignored path(s) under theme are not swapped"*"theme/build/"*) ok "they are named in a warning" ;; *) bad "they are named in a warning"; printf '%s\n' "$OUT" | sed 's/^/         | /' ;; esac
+eq "the command reads them as they are" "$(cat "$W/seen-build")" "built-after"
+rm -rf "$R/theme/build"
+
 run --ref feature -- true
 status "nothing differs from the ref: exit 2" 2
 run --ref no-such-ref -- true

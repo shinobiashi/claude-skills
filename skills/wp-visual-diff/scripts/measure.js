@@ -135,6 +135,7 @@ async function measurePage( page, url, settle ) {
 		url,
 		status: resp ? resp.status() : null,
 		finalPath: new URL( page.url() ).pathname,
+		finalUrl: page.url(),
 		error404: data.error404,
 		title: data.title,
 		height: data.height,
