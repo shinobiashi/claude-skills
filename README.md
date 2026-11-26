@@ -105,6 +105,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | スキル | 用途 |
 |---|---|
 | [`dev-env`](skills/dev-env/SKILL.md) | ローカル開発環境のポート台帳を一元管理するスキル。wp-env を使う各リポジトリに 10 ポートずつの「スロット」を割り当て、Word… |
+| [`wc-studio-prod-copy`](skills/wc-studio-prod-copy/SKILL.md) | 本番の WooCommerce サイトを WordPress Studio に取り込み（テーマを除く DB・uploads・plugins）、WP-Cron・Action Scheduler・SMTP 送信・外部 HTTP を止めたうえで顧客データを匿名化する。取り込む前に置く安全策の mu-plugin、個人情報の洗い出し、匿名化（HPOS と旧来の注文）、許可していないメールアドレスが残っていれば失敗する走査（関門）付き |
 
 ### WooCommerce 開発
 

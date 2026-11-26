@@ -5,6 +5,32 @@
 ## [Unreleased]
 
 ### Added
+- `wc-studio-prod-copy`: 新規。本番の WooCommerce サイトを WordPress Studio のローカルサイトに取り込み（`site_pull` の `sqls,uploads,plugins`。
+  リポジトリへのシンボリックリンクのテーマを書き換えないよう themes を、ホスティング会社固有のキャッシュ用ファイルを持ち込まないよう contents を外す）、顧客データを匿名化する。
+  `assets/local-prod-copy-safety.php` は取り込む前に置く mu-plugin で、ローカル（環境が local/development かつ localhost・*.local・*.test）でだけ動き、
+  `DISABLE_WP_CRON` と `pre_get_ready_cron_jobs`（`wp-cron.php` を直接叩かれた場合も）で WP-Cron を、Action Scheduler の非同期実行を止め、
+  `option_active_plugins` で SMTP 系のプラグインを読み込まず（Studio がメールを手元に保存する）、外部への HTTP を止める（`LOCAL_PROD_COPY_*` の定数で調整）。
+  `scripts/anonymize.php` は顧客（管理者は残す）・HPOS の注文と住所と住所の検索用インデックス・旧来の注文（posts テーブル）・注文メモ（削除）・レビューの投稿者・
+  顧客の集計表・ダウンロード権限・セッションやメールログやジョブ・Jetpack のお問い合わせの送信・領収書 PDF を、直接クエリで書き換える（API で保存すると連携のフックが動くため）。
+  ローカルでなければ拒否し、管理者の権限を持つアカウントが 1 つも無ければ拒否し（全員がログインできなくなるため。この拒否は実行しては確かめていない）、
+  `dry-run` はトランザクションで巻き戻し、SQLite なら最後に `secure_delete` と VACUUM。サイト固有のメタキーは設定 JSON で足す（`assets/anonymize-config.example.json`）。
+  `scripts/scan-pii.sh` が関門で、DB ファイル（-wal も）・SQL の控え・ログを走査し、許可していないメールアドレス・領収書 PDF・読めない圧縮ファイルがあれば exit 1（表示はドメインだけ）。
+  見つけられるのはメールアドレスだけで、規則に無いキーの氏名・電話・住所は通るので、手順では洗い出しの「要確認」のキーをすべて判断することを必須にした。
+  許可はドメイン単位とアドレス単位（管理者の個人アドレスがフリーメールでも、ドメインごとは許可しない）で、`strings` が隣の列のバイトをくっつけた形も通す。
+  `scripts/pii-inventory.php` は個人情報らしいのに規則に無いメタキーと、走査の許可リスト（管理者・店舗のアドレス）を、`scripts/find-string.php` は文字列の在りかを出す。
+  取り込んだ後に決済をテストモードにする手順も入れた（安全策は SDK が独自に行う通信を止められないため。PAY.JP は `payjp_settings` の `test_mode` を真にし、
+  使われるキーが `sk_test_` になることを確かめる。ほかの決済プラグインは未確認）。
+  WP-CLI の `eval-file` は `--` 付きの引数を自分のオプションと見なすので、スクリプトの引数は `config=`・`dry-run` の形にした。
+  背景: okatora-shop で本番からテーマ以外を Studio に取り込んだとき、安全策を入れる前に WP-Cron が起動しており（`doing_cron` が取り込みの 1 分後）、
+  最初の匿名化で `_wc_email_verified_wp` が漏れて走査だけが見つけた（いずれもユーザー指示で仕組み化）。
+  検証: Studio（SQLite）上の本番の複製（WooCommerce 11・HPOS）で、合成のマーカー行（顧客・HPOS の注文と住所・cart-bridge-jp の配送 JSON・旧来の注文・注文メモ・レビュー・
+  規則に無いメタキー）を直接入れ、`dry-run` が巻き戻すこと、規則にあるものが消えること、規則に無いキーを走査が見つけて `find-string.php` が場所を示すこと、
+  設定に足して再実行すると走査が通ることを確かめた（マーカーは後で削除）。安全策の mu-plugin も同じローカルに一時的に置き、外部への HTTP が止まり
+  自分のサイトへは届くこと、予約済みのイベントがあっても実行対象が 0 件になること、`LOCAL_PROD_COPY_UNLOAD_PLUGINS` のプラグインが読み込まれないこと、
+  見た目が変わらないこと（`wp-visual-diff`）を確かめた。「安全策を置いてから取り込む」流れの通しと、MySQL（wp-env など）は未検証。
+  シナリオテスト 93 件（`scripts/test-lib.sh` 40・`test-scan-pii.sh` 33・`test-safety-plugin.sh` 20。WordPress もネットワークも不要）。
+  ローカルの判定（環境・ホスト）・`_wc_email_verified_wp` の規則・JSON の `if_nonempty`・似たドメイン・-wal・領収書 PDF・走査対象が無いときの扱い・
+  許可アドレスの後ろに続く別ラベル・mu-plugin のローカル判定と WP-Cron と SMTP プラグインとワイルドカードの 13 か所は、壊すと名指しのテストが落ちることを確かめた
 - `dependabot-batch`: 新規。Dependabot の PR をまとめて捌く。CI の色だけでは判断できないところ（緑のまま検出力が落ちる、赤でも更新が原因ではない、
   最初の失敗の先が見えない、人が手を入れた PR は Dependabot がリベースしない）に答えてから、マージの順番を渡す。リポジトリ固有の知識は持たず、
   各リポジトリの `docs/`・`CLAUDE.md`・`.github/dependabot.yml` のコメントを読む。`scripts/inventory.py` が `gh pr checks` に出ない情報（再実行で緑に
