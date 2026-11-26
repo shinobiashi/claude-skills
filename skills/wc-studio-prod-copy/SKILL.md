@@ -15,7 +15,7 @@ description: 本番の WooCommerce サイトを WordPress Studio のローカル
 | `assets/local-prod-copy-safety.php` | 取り込む前に `wp-content/mu-plugins/` に置く安全策。ローカル（環境が local/development かつ localhost 等）でだけ動き、WP-Cron（`wp-cron.php` を直接叩かれた場合も）・Action Scheduler の非同期実行を止め、SMTP 系のプラグインを読み込まず（Studio がメールを手元に保存する）、外部への HTTP を止める。管理画面に「止めているもの」を出す |
 | `scripts/pii-inventory.php` | 個人情報がありそうな場所の一覧（空でないテーブル、権限ごとの人数、HPOS、有効なプラグイン、規則が扱っていない個人情報らしいメタキー＝「要確認」）。`write-allow=` で管理者・店舗のアドレスを走査の許可リストに書き出す |
 | `scripts/anonymize.php` | 匿名化。ローカルでなければ拒否する。`dry-run` はトランザクションで巻き戻す。SQLite なら最後に VACUUM |
-| `scripts/scan-pii.sh` | **関門**。DB ファイル（-wal も）・SQL の控え・ログを走査し、許可していないメールアドレス、領収書 PDF、読めない圧縮ファイルがあれば exit 1。表示はドメインだけ |
+| `scripts/scan-pii.sh` | **関門**。DB ファイル（-wal も）・SQL の控え・ログを走査し、許可していないメールアドレス、許可したアドレスの前に文字が付いたもの、領収書 PDF、読めない圧縮ファイル（直接指定しても）があれば exit 1。表示はドメインだけ |
 | `scripts/find-string.php` | 文字列（`@gmail.com` など）がどのテーブル・列・行・メタキーにあるか |
 | `scripts/lib.php` | WordPress 抜きで試せる関数（ローカルかどうかの判定、JSON の書き換え、既定の規則） |
 | `assets/anonymize-config.example.json` | サイト固有のメタキーを足す設定 JSON の見本（cart-bridge-jp を使う店舗の例） |
@@ -99,6 +99,9 @@ bash scan-pii.sh --allow-file <site>/.prod-copy-tmp/allow.txt [--allow-domain <�
   - 顧客のデータ → そのキーをサイトの設定 JSON に足して 5 をやり直す
   - 管理者・店舗・開発者のアドレス → `--allow-address`（アドレス単位）か、店舗の独自ドメインなら `--allow-domain`
   - **顧客が使うフリーメールのドメイン（gmail.com など）は許可しない**。管理者の個人アドレスが gmail なら `--allow-address` でアドレスだけを許可する
+- 「allowlisted address(es) with characters glued on before them」が出たら、許可したアドレスの前に文字が付いている。隣の列の値か、
+  そのアドレスで終わる別のアドレス（`shop@` に対する `myshop@`）かは区別できないので、`find-string.php '<許可したアドレス>'` で場所を見る。
+  すべて管理者・店舗の行なら `--allow-glued-address` を付けて走査し直す。顧客の行があれば、上の「顧客のデータ」と同じく直す
 - 通るまで 5 と 6 を繰り返す。通ったら完了
 
 ### 7. 片付けと報告
@@ -117,7 +120,10 @@ bash scan-pii.sh --allow-file <site>/.prod-copy-tmp/allow.txt [--allow-domain <�
 - **管理画面を開くと、WP-Cron を止めていても Action Scheduler が動く**（非同期実行）。安全策の mu-plugin が止める
 - **最初の匿名化で漏れたキーを見つけたのは走査だけだった**: `_wc_email_verified_wp`（メール確認済みのアドレス）。いまは既定の規則に入れてある。
   同じように、規則に無いキーは走査で見つけて設定に足す
-- **`strings` は隣の列のバイトをアドレスの前後にくっつける**（`customer1@example.comz`、`…Qx7vadmin@localhost.localdomain`）。`scan-pii.sh` は許可したドメイン・アドレスに文字がくっついたものも通す
+- **`strings` は隣の列のバイトをアドレスの前後にくっつける**（`customer1@example.comz`、`…Qx7vadmin@localhost.localdomain`）。`scan-pii.sh` は、
+  許可したドメイン・アドレスの後ろに英字だけがくっついたものは通す（`testcompany.jp` のようにドットが続くものは別のドメインとして失敗）。
+  許可したアドレスの前にくっついたものは失敗にし、別の行に出す（SQLite では `user_nicename` の直後に `user_email` が来るので、管理者のアドレスでよく出る）。
+  以前は前にくっついたものも通していたが、`shop@` を許可すると顧客の `myshop@` も通ってしまっていた（PR #5 の Copilot の指摘）
 - **安全策で読み込まないプラグインは、管理画面では「無効」に見える**。その状態で別のプラグインを有効にすると、DB 上も無効として保存される（ローカルの複製なので実害は無い）
 - **Studio の DB は `sqlite3` で開けないことがあった**（`unable to open database file (14)`）。VACUUM は WordPress の SQLite 接続（PDO）経由で行う。`anonymize.php` が自分で行う
 - **注文メモは消す**: 自由記述（氏名・メール・送り状番号が入る）で、置き換えでは消し切れない

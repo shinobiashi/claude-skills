@@ -56,6 +56,13 @@ has "reports the look-alike" "*@shop.example.jp.evil.example-isp.com"
 blob "$W/allow/.ht.sqlite" "Info@SHOP.Example.JP"
 run --allow-domain Shop.Example.jp "$W/allow"
 status "domains compare case-insensitively" 0
+blob "$W/allow/.ht.sqlite" "x@shop.example.jpevil.example-isp.com"
+run --allow-domain shop.example.jp "$W/allow"
+status "letters glued after an allowlisted domain pass only up to the end, not into more labels" 1
+blob "$W/allow/.ht.sqlite" "taro@testcompany.example-isp.jp"
+run "$W/allow"
+status "a domain that only starts with a default entry (test) fails" 1
+has "reports it" "*@testcompany.example-isp.jp"
 
 # Exact addresses: a staff address passes without allowing its whole domain ----------------------
 mkdir -p "$W/staff"
@@ -63,9 +70,25 @@ blob "$W/staff/.ht.sqlite" "owner.private@freemail.example-isp.com" "customer9@f
 run --allow-address Owner.Private@freemail.example-isp.com "$W/staff"
 status "a customer at the staff member's mail provider still fails" 1
 has "the customer is reported once" "    1 *@freemail.example-isp.com"
-blob "$W/staff/.ht.sqlite" "Qx7vKp2LmZowner.private@freemail.example-isp.com" "owner.private@freemail.example-isp.comV"
+blob "$W/staff/.ht.sqlite" "owner.private@freemail.example-isp.comV"
 run --allow-address owner.private@freemail.example-isp.com "$W/staff"
-status "an allowlisted address passes with neighbouring bytes glued before or after it" 0
+status "an allowlisted address passes with letters glued on after it" 0
+blob "$W/staff/.ht.sqlite" "Qx7vKp2LmZowner.private@freemail.example-isp.com"
+run --allow-address owner.private@freemail.example-isp.com "$W/staff"
+status "characters glued on before an allowlisted address fail" 1
+has "they are reported on their own line" "1 allowlisted address(es) with characters glued on before them"
+has "with the domain" "    1 *@freemail.example-isp.com"
+hasnt "never prints the glued characters" "Qx7vKp2LmZ"
+has "points to --allow-glued-address" "--allow-glued-address"
+run --allow-address owner.private@freemail.example-isp.com --allow-glued-address "$W/staff"
+status "--allow-glued-address passes them" 0
+has "and counts them" "1 allowlisted address(es) with characters glued on before them passed"
+blob "$W/staff/.ht.sqlite" "customer.owner.private@freemail.example-isp.com"
+run --allow-address owner.private@freemail.example-isp.com "$W/staff"
+status "a longer address that ends in the allowlisted one fails" 1
+blob "$W/staff/.ht.sqlite" "nicenamestaff@shop.example.jp"
+run --allow-address staff@shop.example.jp --allow-domain shop.example.jp "$W/staff"
+status "characters glued before an address in an allowlisted domain pass" 0
 blob "$W/staff/.ht.sqlite" "owner.private@freemail.example-isp.com.attacker.example"
 run --allow-address owner.private@freemail.example-isp.com "$W/staff"
 status "an allowlisted address followed by a dot and more labels is a different address" 1
@@ -94,7 +117,16 @@ printf 'x' | gzip >"$W/uploads/backup.sql.gz"
 run "$W/uploads"
 status "a compressed archive fails" 1
 has "names the archive" "backup.sql.gz"
+run "$W/uploads/backup.sql.gz"
+status "a compressed archive given as the path fails" 1
+has "says it cannot be read" "a compressed archive that this scan cannot read"
 rm -f "$W/uploads/backup.sql.gz"
+mkdir -p "$W/uploads/wpo_wcpdf_abc/attachments/document-1"
+printf '%%PDF-1.4 receipt' >"$W/uploads/wpo_wcpdf_abc/attachments/document-1/Receipt-1.PDF"
+run "$W/uploads/wpo_wcpdf_abc/attachments/document-1/Receipt-1.PDF"
+status "a generated receipt given as the path fails" 1
+has "explains the receipt" "a generated document"
+rm -rf "$W/uploads/wpo_wcpdf_abc"
 
 # A SQL backup passed directly -------------------------------------------------------------------
 printf "INSERT INTO wp_users VALUES (5,'x','x','x','someone@docomo.example.jp');\n" >"$W/before-pull.sql"
