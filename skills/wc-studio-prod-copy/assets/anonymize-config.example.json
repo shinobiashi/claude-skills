@@ -1,0 +1,36 @@
+{
+	"_comment": "Site config for anonymize.php / pii-inventory.php. Lists are added to the built-in rules and maps are merged into them (see wcspc_default_config() in scripts/lib.php). Values: '@first_name' '@address_1' '@city' '@postcode' '@phone' '@kana' '@text' map to the fake values; '@id' '@email' '@login' '@display_name' to the customer's anonymized identity (user meta only). order_item_meta (blank / text / delete) and comment_meta (delete / delete_prefix) take the keys pii-inventory.php lists as 要確認. This example is for a store that uses cart-bridge-jp.",
+	"staff_roles": [ "administrator", "shop_manager" ],
+	"user_meta": {
+		"const": {
+			"_cbjp_kana": "@kana",
+			"_cbjp_tel_mobile": "@phone",
+			"_cbjp_fax": ""
+		},
+		"per_user": {
+			"_cbjp_full_name": "@display_name"
+		}
+	},
+	"order_meta": {
+		"blank": [ "_cbjp_mobile", "_cbjp_slip_number", "_cbjp_tracking_url", "_refund_reason" ],
+		"text": [ "_cbjp_noshi_text" ],
+		"json": {
+			"_cbjp_sale_deliveries": {
+				"name": "顧客",
+				"furigana": "テスト",
+				"postal": "000-0000",
+				"address1": "テスト町1-2-3",
+				"address2": "",
+				"tel": "000-0000-0000",
+				"memo": "",
+				"slip_number": "",
+				"tracking_url": "",
+				"noshi_text": { "if_nonempty": "テスト" },
+				"card_name": { "if_nonempty": "テスト" },
+				"card_text": { "if_nonempty": "テスト" },
+				"wrapping_name": { "if_nonempty": "テスト" }
+			}
+		}
+	},
+	"truncate_tables": [ "cbjp_jobs" ]
+}
