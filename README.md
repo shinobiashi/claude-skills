@@ -160,6 +160,7 @@ bash install.sh --check      # 配置済みコピーとの差分を検出（変�
 | [`wp-org-release`](skills/wp-org-release/SKILL.md) | Use when publishing or releasing a WordPress plugin to the WordPress.org plugin director… |
 | [`release-bump`](skills/release-bump/SKILL.md) | タグ push で wp.org へ自動デプロイするプラグインの「バージョン bump PR → 後から入った fix PR の changelog 追記 → マージ前チェック → タグ push」。`@since` を巻き込まない版数の書き換え、前タグ以降の PR と changelog の突き合わせ、タグを本流だけに push。モノレポ（`plugins/<slug>/`）と接頭辞付きのタグ（`v`・`pro-v`）にも対応… |
 | [`wporg-screenshots`](skills/wporg-screenshots/SKILL.md) | wordpress.org の readme 用スクリーンショット（`.wordpress-org/screenshot-N.png`）を wp-env の tests サイトで Playwright を使って撮り直す。readme のキャプションと枚数を照合し、外部 API のモック・データの準備・片付けはプロジェクトの `.claude/wporg-screenshots/` のフックに任せる… |
+| [`wp-visual-diff`](skills/wp-visual-diff/SKILL.md) | WordPress サイトの見た目をコードの変更前後で比べる。変更前の版に一時的に差し替えて計測し（失敗・Ctrl-C でも必ず元に戻し、未コミットの変更は消さない）、Playwright で全 `<img>` の位置・サイズ・ページの高さ・スクリーンショットを記録して差を出す。404 ページ・読み込めない画像・差し替えが効いていない状態を見分ける |
 
 ### 開発ワークフロー
 
