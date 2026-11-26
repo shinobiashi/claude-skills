@@ -82,6 +82,16 @@ make onlyone "del run['pages']['top@390']"
 run "$W/before.json" "$W/onlyone.json" --no-pixels
 status "pages measured in only one run make the comparison invalid" 2
 
+make redirected "run['pages']['top@390']['finalPath'] = '/shop/'; run['pages']['top@390']['fingerprint']['imgs'] = 'f2'"
+run "$W/before.json" "$W/redirected.json" --no-pixels
+status "a page that ended on a different path in one run makes the comparison invalid" 2
+has "names both paths" "top@390: the runs ended on different pages (/ -> /shop/"
+
+# The synthetic runs have no screenshots: without --no-pixels nothing could check the pixels.
+run "$W/before.json" "$W/after.json"
+status "a missing screenshot makes the comparison invalid, not a pass" 2
+has "suggests --no-pixels" "screenshot missing (None) — pass --no-pixels"
+
 if python3 -I -c 'import PIL' 2>/dev/null; then
 	python3 -I - "$W" <<'PY'
 import sys

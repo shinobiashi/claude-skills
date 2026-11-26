@@ -11,11 +11,15 @@
 # pathspecs (modified files get the ref's content, files missing at the ref are moved aside,
 # files deleted since the ref come back), plus untracked files under them (moved aside).
 # Files with uncommitted changes (including untracked files) are refused unless --allow-dirty;
-# with it they are backed up and restored exactly. The backup directory is printed first and
-# exported as SWAP_RUN_BACKUP, so it can be recovered by hand if the process is killed with -9.
+# with it they are backed up and restored exactly. Symbolic links in the set (in the working
+# tree or at the ref) are refused, since they would come back as regular files: narrow --path
+# to leave them out. The backup directory is printed first and exported as SWAP_RUN_BACKUP, so
+# it can be recovered by hand if the process is killed with -9. If a file cannot be swapped,
+# everything is restored and the command is not run.
 #
-# Exit: the command's exit status; 2 usage error, unknown ref, nothing differs, or dirty files
-# refused; 3 the files could not be restored exactly (the backup is kept); 130/143 interrupted.
+# Exit: the command's exit status; 2 usage error, unknown ref, nothing differs, dirty files or
+# symbolic links refused, or a file could not be swapped (restored, the command not run);
+# 3 the files could not be restored exactly (the backup is kept); 130/143 interrupted.
 set -uo pipefail
 
 REF=""
@@ -28,7 +32,7 @@ while [ $# -gt 0 ]; do
 	--path) [ $# -ge 2 ] || { echo "swap-run: --path needs a value" >&2; exit 2; }; PATHS+=("$2"); shift 2 ;;
 	--repo) [ $# -ge 2 ] || { echo "swap-run: --repo needs a value" >&2; exit 2; }; REPO="$2"; shift 2 ;;
 	--allow-dirty) ALLOW_DIRTY=1; shift ;;
-	-h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,22p' "$0"; exit 0 ;;
 	--) shift; break ;;
 	*) echo "swap-run: unknown argument $1 (put the command after --)" >&2; exit 2 ;;
 	esac
@@ -63,6 +67,19 @@ if [ ${#DIRTY[@]} -gt 0 ] && [ "$ALLOW_DIRTY" -eq 0 ]; then
 	echo "swap-run: these files have uncommitted changes (or are untracked); refusing so they are not lost:" >&2
 	printf '   %s\n' "${DIRTY[@]}" >&2
 	echo "   commit them, or pass --allow-dirty to back them up and restore them exactly" >&2
+	exit 2
+fi
+
+# cp -p follows a symbolic link and `git show` writes a link's target as text, so a link
+# would come back as a regular file.
+LINKS=()
+for f in "${FILES[@]}"; do
+	if [ -L "$f" ] || [ "$(git ls-tree "$REF" -- "$f" | cut -d' ' -f1)" = "120000" ]; then LINKS+=("$f"); fi
+done
+if [ ${#LINKS[@]} -gt 0 ]; then
+	echo "swap-run: these are symbolic links (in the working tree or at $REF), which cannot be swapped and restored exactly:" >&2
+	printf '   %s\n' "${LINKS[@]}" >&2
+	echo "   narrow --path to leave them out" >&2
 	exit 2
 fi
 
@@ -121,15 +138,23 @@ trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 trap 'restore || exit 3' EXIT
 
+# A half-swapped tree is a state that never existed: restore (the EXIT trap) instead of
+# running the command against it.
+swap_failed() {
+	echo "swap-run: could not swap $1 — restoring the files; the command is not run" >&2
+	exit 2
+}
 while IFS="$(printf '\t')" read -r _ _ f; do
 	if git cat-file -e "${REF}:${f}" 2>/dev/null; then
-		mkdir -p "$(dirname "$f")"
-		rm -f "$f"
-		git show "${REF}:${f}" >"$f"
-		[ "$(git ls-tree "$REF" -- "$f" | cut -d' ' -f1)" = "100755" ] && chmod +x "$f"
+		mkdir -p "$(dirname "$f")" || swap_failed "$f"
+		rm -f "$f" || swap_failed "$f"
+		git show "${REF}:${f}" >"$f" || swap_failed "$f"
+		if [ "$(git ls-tree "$REF" -- "$f" | cut -d' ' -f1)" = "100755" ]; then
+			chmod +x "$f" || swap_failed "$f"
+		fi
 		echo "   swapped to $REF: $f" >&2
 	else
-		rm -f "$f"
+		rm -f "$f" || swap_failed "$f"
 		echo "   moved aside (not in $REF): $f" >&2
 	fi
 done <"$BK/manifest"

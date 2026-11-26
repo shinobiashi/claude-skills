@@ -115,6 +115,32 @@ status "a backup that no longer matches makes the run fail with 3" 3
 case "$OUT" in *"RESTORE FAILED"*) ok "says the restore failed and keeps the backup" ;; *) bad "says the restore failed and keeps the backup"; printf '%s\n' "$OUT" | sed 's/^/         | /' ;; esac
 (cd "$R" && git checkout -q -- theme/a.php)
 
+# A file that cannot be swapped: restore and do not run the command. A git that writes part of
+# the file and then fails on `show` stands in for a full disk.
+mkdir -p "$W/shim"
+# shellcheck disable=SC2016 # $1 and $@ belong to the shim
+printf '#!/bin/sh\nif [ "$1" = show ]; then echo partial; exit 1; fi\nexec "%s" "$@"\n' "$(command -v git)" >"$W/shim/git"
+chmod +x "$W/shim/git"
+rm -f "$W/ran"
+OUT="$(cd "$R" && PATH="$W/shim:$PATH" bash "$SCRIPT" --ref main -- sh -c "touch $W/ran" 2>&1)"
+RC=$?
+status "a file that cannot be swapped: exit 2" 2
+if [ -e "$W/ran" ]; then bad "the command is not run after a failed swap"; else ok "the command is not run after a failed swap"; fi
+eq "a.php is restored after a failed swap" "$(content theme/a.php)" "v2"
+eq "the working tree is clean after a failed swap" "$(cd "$R" && git status --porcelain)" ""
+
+# Symbolic links would come back as regular files (cp -p and git show follow them): refused.
+(cd "$R" && git switch -qc links feature && ln -s a.php theme/link.php && git add theme/link.php && git commit -qm link)
+rm -f "$W/ran"
+run --ref feature -- sh -c "touch $W/ran"
+status "a symbolic link in the working tree is refused" 2
+if [ -L "$R/theme/link.php" ]; then ok "the link is left as a link"; else bad "the link is left as a link"; fi
+if [ -e "$W/ran" ]; then bad "the command is not run when a link is refused"; else ok "the command is not run when a link is refused"; fi
+(cd "$R" && git checkout -q -- theme/link.php && git switch -q feature)
+run --ref links -- true
+status "a symbolic link at the ref is refused" 2
+eq "the working tree is clean after the refusal" "$(cd "$R" && git status --porcelain)" ""
+
 run --ref feature -- true
 status "nothing differs from the ref: exit 2" 2
 run --ref no-such-ref -- true

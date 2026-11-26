@@ -5,10 +5,12 @@ Usage:
   compare.py BEFORE.json AFTER.json [--tolerance 0.5] [--allow-broken] [--allow-same-dom] [--no-pixels]
 
 Checks, in order:
-  1. Preconditions on both runs (exit 2 when broken): the same pages were measured, every page
-     answered HTTP < 400, none is WordPress's 404 template, and every image loaded (a page whose
-     images 404 is already broken, and comparing two broken pages says nothing; --allow-broken
-     to compare anyway).
+  1. Preconditions on both runs (exit 2 when broken): the same pages were measured, each page
+     ended on the same path in both runs (a redirect in one run means two different pages),
+     every page answered HTTP < 400, none is WordPress's 404 template, every image loaded (a
+     page whose images 404 is already broken, and comparing two broken pages says nothing;
+     --allow-broken to compare anyway), and every screenshot exists unless --no-pixels (a
+     missing one would leave a CSS change unchecked).
   2. Layout: document height, image count, and each image's src and box (beyond --tolerance px).
   3. Pixels: the full-page screenshots, byte for byte, then (with Pillow) the rows that differ
      and the images that overlap them.
@@ -128,8 +130,20 @@ def main(argv=None):
     missing = sorted(set(before["pages"]) ^ set(after["pages"]))
     if missing:
         problems.append(f"pages measured in only one run: {', '.join(missing)}")
+    for key in sorted(set(before["pages"]) & set(after["pages"])):
+        path_b, path_a = before["pages"][key].get("finalPath"), after["pages"][key].get("finalPath")
+        if path_b != path_a:
+            problems.append(f"{key}: the runs ended on different pages ({path_b} -> {path_a}; a redirect in one of them)")
     problems += preconditions(before, before.get("label", "before"), args.allow_broken)
     problems += preconditions(after, after.get("label", "after"), args.allow_broken)
+    if not args.no_pixels:
+        for run in (before, after):
+            for key, page in sorted(run["pages"].items()):
+                shot = page.get("screenshot")
+                if not (shot and os.path.exists(shot)):
+                    problems.append(
+                        f"{run.get('label')} {key}: screenshot missing ({shot}) — pass --no-pixels to compare the layout only"
+                    )
     if problems:
         print("## Cannot compare (exit 2)")
         for p in problems:
@@ -158,19 +172,16 @@ def main(argv=None):
         pixel_same = None
         if not args.no_pixels:
             pixel_same, pixel_notes = compare_pixels(b, a, a["imgs"], float(after.get("dpr", 1)))
-            if pixel_same is False:
-                notes += pixel_notes
-            elif pixel_same is None:
+            if not pixel_same:
                 notes += pixel_notes
         fp_b, fp_a = b.get("fingerprint", {}), a.get("fingerprint", {})
         dom_changed = fp_b != fp_a
         if dom_changed:
             same_dom = False
-        real = [n for n in notes if not n.startswith("screenshot missing")]
-        if real:
+        if notes:
             differences += 1
-            print(f"- **{key}**: {len(real)} difference(s)")
-            for n in real:
+            print(f"- **{key}**: {len(notes)} difference(s)")
+            for n in notes:
                 print(f"  - {n}")
         else:
             extra = " (image attributes or CSS changed, display did not)" if dom_changed else ""
