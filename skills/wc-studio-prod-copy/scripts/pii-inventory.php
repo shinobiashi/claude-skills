@@ -5,8 +5,9 @@
  *   wp eval-file <dir>/pii-inventory.php [config=<site-config.json>] [write-allow=<path>]
  *
  * Prints the non-empty tables, staff/customer counts, whether orders use HPOS, active plugins,
- * and the user / order meta keys whose names look personal but that neither the built-in rules
- * nor the site config cover ("要確認"). Add those to the site config (or confirm they are not
+ * the user / order meta keys whose names look personal but that neither the built-in rules
+ * nor the site config cover, every customer-facing order item meta key, and the meta keys of
+ * customers' comments ("要確認"). Add those to the site config (or confirm they are not
  * personal) before running anonymize.php. Read-only, except that write-allow= writes the staff
  * accounts' addresses and the site's own addresses (admin, store sender) to a file for
  * scan-pii.sh --allow-file; only the number of entries is printed.
@@ -60,8 +61,7 @@ $hpos = class_exists( 'Automattic\WooCommerce\Utilities\OrderUtil' ) && Automatt
 WP_CLI::log( '== orders: HPOS ' . ( $hpos ? 'on' : 'off' ) . ', sync ' . ( 'yes' === get_option( 'woocommerce_custom_orders_table_data_sync_enabled' ) ? 'on' : 'off' ) . ', legacy order posts ' . (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type IN ('shop_order', 'shop_order_refund')" ) );
 WP_CLI::log( '== active plugins: ' . implode( ', ', array_map( 'dirname', (array) get_option( 'active_plugins' ) ) ) );
 
-$personal = '/(e-?mail|phone|tel(_|$)|mobile|fax|contact|name|kana|address|addr|postal|zip|postcode|city|(^|_)ip(_|$)|user_?agent|note|memo|noshi|slip|tracking|secret|token|card|birth)/i';
-$covered  = function ( $key, array $lists ) {
+$covered = function ( $key, array $lists ) {
 	foreach ( $lists as $list ) {
 		if ( in_array( $key, $list, true ) ) {
 			return true;
@@ -91,7 +91,7 @@ foreach ( array( 'billing', 'shipping' ) as $type ) {
 }
 $order_lists[] = $legacy_handled;
 
-$report = function ( $label, $sql, array $lists, $prefixes = array() ) use ( $wpdb, $personal, $covered ) {
+$report = function ( $label, $sql, array $lists, $prefixes = array() ) use ( $wpdb, $covered ) {
 	$rows = $wpdb->get_results( $sql );
 	$todo = array();
 	foreach ( $rows as $r ) {
@@ -101,7 +101,7 @@ $report = function ( $label, $sql, array $lists, $prefixes = array() ) use ( $wp
 				$skip = true;
 			}
 		}
-		if ( ! $skip && preg_match( $personal, $r->meta_key ) && ! $covered( $r->meta_key, $lists ) ) {
+		if ( ! $skip && wcspc_looks_personal( $r->meta_key ) && ! $covered( $r->meta_key, $lists ) ) {
 			$todo[] = $r->meta_key . '(' . $r->c . ')';
 		}
 	}
@@ -114,6 +114,40 @@ if ( $hpos || in_array( $p . 'wc_orders_meta', $wpdb->get_col( 'SHOW TABLES' ), 
 	$report( 'HPOS order meta', "SELECT meta_key, COUNT(*) c FROM {$p}wc_orders_meta GROUP BY meta_key ORDER BY c DESC", $order_lists );
 }
 $report( 'legacy order post meta', "SELECT pm.meta_key, COUNT(*) c FROM {$wpdb->postmeta} pm JOIN {$wpdb->posts} po ON po.ID = pm.post_id WHERE po.post_type IN ('shop_order', 'shop_order_refund') GROUP BY pm.meta_key ORDER BY c DESC", $order_lists );
+
+// key => count lines for the reports below.
+$counted = function ( $sql ) use ( $wpdb ) {
+	$out = array();
+	foreach ( $wpdb->get_results( $sql ) as $r ) {
+		$out[ (string) $r->meta_key ] = (int) $r->c;
+	}
+	return $out;
+};
+$listed = function ( array $todo ) {
+	$out = array();
+	foreach ( $todo as $key => $n ) {
+		$out[] = $key . '(' . $n . ')';
+	}
+	return $out ? implode( ' ', $out ) : 'なし';
+};
+
+if ( in_array( $p . 'woocommerce_order_itemmeta', $wpdb->get_col( 'SHOW TABLES' ), true ) ) {
+	$items = $counted( "SELECT meta_key, COUNT(*) c FROM {$p}woocommerce_order_itemmeta GROUP BY meta_key ORDER BY c DESC" );
+	WP_CLI::log( '== order item meta: ' . count( $items ) . ' keys (every customer-facing key is listed: add-ons store what the customer typed under display labels)' );
+	WP_CLI::log( '   要確認: ' . $listed( wcspc_item_meta_todo( $items, $cfg ) ) . ' → order_item_meta (blank / text / delete) in the site config, or confirm they are not personal' );
+}
+
+$staff_ids = array_map( 'intval', get_users( array( 'role__in' => (array) $cfg['staff_roles'], 'fields' => 'ID' ) ) );
+$customer  = 'user_id NOT IN (' . implode( ',', $staff_ids ? $staff_ids : array( 0 ) ) . ") AND comment_type <> 'order_note'";
+WP_CLI::log(
+	sprintf(
+		"== customers' comments / reviews: %d approved (bodies kept: they are public on production), %d not approved (deleted by anonymize.php)",
+		(int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE $customer AND comment_approved = '1'" ),
+		(int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE $customer AND comment_approved <> '1'" )
+	)
+);
+$cmeta = $counted( "SELECT meta_key, COUNT(*) c FROM {$wpdb->commentmeta} WHERE comment_id IN (SELECT comment_ID FROM {$wpdb->comments} WHERE $customer AND comment_approved = '1') GROUP BY meta_key ORDER BY c DESC" );
+WP_CLI::log( '   comment meta 要確認: ' . $listed( wcspc_comment_meta_todo( $cmeta, $cfg ) ) . ' → comment_meta (delete / delete_prefix) in the site config, or confirm they are not personal' );
 
 $types = array();
 foreach ( $wpdb->get_results( "SELECT post_type, COUNT(*) c FROM {$wpdb->posts} GROUP BY post_type ORDER BY c DESC" ) as $r ) {

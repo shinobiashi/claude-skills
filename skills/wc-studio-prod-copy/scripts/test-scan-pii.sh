@@ -133,6 +133,39 @@ printf "INSERT INTO wp_users VALUES (5,'x','x','x','someone@docomo.example.jp');
 run "$W/before-pull.sql"
 status "a SQL backup with an address fails" 1
 
+# The whole local part is read: characters such as = belong to the address ----------------------
+mkdir -p "$W/local"
+printf "INSERT INTO wp_users VALUES (1,'owner','owner.private@freemail.example-isp.com');\n{\"email\":\"owner.private@freemail.example-isp.com\"}\n" >"$W/local/dump.sql"
+run --allow-address owner.private@freemail.example-isp.com "$W/local/dump.sql"
+status "an allowlisted address quoted in SQL or JSON passes (a leading apostrophe is a quote)" 0
+printf "INSERT INTO wp_users VALUES (6,'x','customer=owner.private@freemail.example-isp.com');\n" >"$W/local/dump.sql"
+run --allow-address owner.private@freemail.example-isp.com "$W/local/dump.sql"
+status "customer=<allowlisted address> is a different address and fails" 1
+has "it is reported as glued on before" "1 allowlisted address(es) with characters glued on before them"
+printf "INSERT INTO wp_users VALUES (7,'x','o'owner.private@freemail.example-isp.com');\n" >"$W/local/dump.sql"
+run --allow-address owner.private@freemail.example-isp.com "$W/local/dump.sql"
+status "an apostrophe inside the local part belongs to the address" 1
+
+# A file that cannot be read is not a clean file ---------------------------------------------------
+mkdir -p "$W/unread"
+blob "$W/unread/.ht.sqlite" "customer12@example.com"
+chmod 000 "$W/unread/.ht.sqlite"
+run "$W/unread/.ht.sqlite"
+status "an unreadable database is an incomplete scan (exit 2), not OK" 2
+has "names the file" "could not be read"
+hasnt "does not say OK" "OK: scanned"
+blob "$W/unread/leak.sql" "someone@docomo.example.jp"
+run "$W/unread"
+status "an unreadable file wins over a finding elsewhere (exit 2)" 2
+has "the finding is still printed" "*@docomo.example.jp"
+chmod 600 "$W/unread/.ht.sqlite"
+mkdir -p "$W/shim"
+printf '#!/bin/sh\nexit 1\n' >"$W/shim/strings"
+chmod +x "$W/shim/strings"
+OUT="$(PATH="$W/shim:$PATH" bash "$SCRIPT" "$W/before-pull.sql" 2>&1)"
+RC=$?
+status "a strings that fails makes the scan incomplete (exit 2), not OK" 2
+
 # Phones are informational -----------------------------------------------------------------------
 blob "$W/clean/.ht.sqlite" "customer12@example.com" "090-1234-5678" "000-0000-0000"
 run --phones "$W/clean"

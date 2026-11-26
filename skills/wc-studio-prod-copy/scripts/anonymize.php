@@ -8,8 +8,11 @@
  * - Staff accounts (administrator / shop_manager by default) are kept so the local admin works.
  * - Writes with direct queries on purpose: saving orders or users through the WooCommerce /
  *   WordPress APIs fires integration hooks that may call production services.
+ * - Every write is checked: on a database error everything is rolled back and the run fails.
  * - dry-run runs everything inside a transaction and rolls it back (files are not deleted).
  * - Covers HPOS orders and legacy (posts table) orders; see SKILL.md for what was tested.
+ * - Customers' comments that are not approved (pending, spam, trash) are deleted; approved
+ *   ones keep their text (it is public on production) with the author columns replaced.
  * - After it, run scan-pii.sh: the scan, not this script, decides whether anything is left.
  *
  * Studio runs WP-CLI with access to the site directory only, so copy this directory into the
@@ -46,6 +49,17 @@ $has    = function ( $suffix ) use ( $tables, $p ) {
 $log    = function ( $label, $n ) {
 	WP_CLI::log( sprintf( '%-52s %s', $label, $n ) );
 };
+// A write that fails (schema mismatch, constraint, an SQLite translation error) must not leave
+// rows untouched while the run commits and says Done: roll everything back and fail.
+$w = function ( $result ) use ( $wpdb ) {
+	if ( false === $result ) {
+		$error = (string) $wpdb->last_error;
+		$query = substr( (string) $wpdb->last_query, 0, 160 );
+		$wpdb->query( 'ROLLBACK' );
+		WP_CLI::error( "Database error; everything was rolled back and nothing changed: {$error} ({$query})" );
+	}
+	return (int) $result;
+};
 
 $pdo = null;
 if ( isset( $wpdb->dbh ) && is_object( $wpdb->dbh ) && method_exists( $wpdb->dbh, 'get_connection' ) ) {
@@ -60,11 +74,12 @@ if ( $pdo && ! $dry ) {
 }
 
 WP_CLI::log( $dry ? '== DRY RUN (everything below is rolled back) ==' : '== Anonymizing ==' );
-$wpdb->query( 'START TRANSACTION' );
+$w( $wpdb->query( 'START TRANSACTION' ) );
 
 $fake     = wcspc_fake();
 $staff    = array_map( 'intval', get_users( array( 'role__in' => (array) $cfg['staff_roles'], 'fields' => 'ID' ) ) );
 if ( ! $staff ) {
+	$wpdb->query( 'ROLLBACK' );
 	WP_CLI::error( 'No account has one of the staff roles (' . implode( ', ', (array) $cfg['staff_roles'] ) . '). Refusing: every user would lose access. Set staff_roles in the config.' );
 }
 $staff_in = implode( ',', $staff );
@@ -76,69 +91,74 @@ $is_staff = function ( $id ) use ( $staff ) {
 $uids = array_map( 'intval', $wpdb->get_col( "SELECT ID FROM {$wpdb->users} WHERE ID NOT IN ($staff_in)" ) );
 foreach ( $uids as $uid ) {
 	$who = wcspc_customer_identity( $uid );
-	$wpdb->update(
-		$wpdb->users,
-		array(
-			'user_login'          => $who['login'],
-			'user_nicename'       => $who['login'],
-			'user_email'          => $who['email'],
-			'user_url'            => '',
-			'display_name'        => $who['display_name'],
-			'user_activation_key' => '',
-			'user_pass'           => '*',
-		),
-		array( 'ID' => $uid )
+	$w(
+		$wpdb->update(
+			$wpdb->users,
+			array(
+				'user_login'          => $who['login'],
+				'user_nicename'       => $who['login'],
+				'user_email'          => $who['email'],
+				'user_url'            => '',
+				'display_name'        => $who['display_name'],
+				'user_activation_key' => '',
+				'user_pass'           => '*',
+			),
+			array( 'ID' => $uid )
+		)
 	);
 }
 $log( 'users anonymized (staff kept: ' . count( $staff ) . ')', count( $uids ) );
 
 $n = 0;
 foreach ( (array) $cfg['user_meta']['const'] as $key => $value ) {
-	$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE meta_key = %s AND user_id NOT IN ($staff_in)", wcspc_resolve( $value ), $key ) );
+	$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE meta_key = %s AND user_id NOT IN ($staff_in)", wcspc_resolve( $value ), $key ) ) );
 }
 foreach ( $wpdb->get_col( "SELECT DISTINCT meta_key FROM {$wpdb->usermeta}" ) as $key ) {
 	if ( wcspc_is_kana_key( $key ) ) {
-		$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE meta_key = %s AND user_id NOT IN ($staff_in) AND meta_value <> ''", $fake['kana'], $key ) );
+		$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE meta_key = %s AND user_id NOT IN ($staff_in) AND meta_value <> ''", $fake['kana'], $key ) ) );
 	}
 }
 foreach ( $uids as $uid ) {
 	$who = wcspc_customer_identity( $uid );
 	foreach ( (array) $cfg['user_meta']['per_user'] as $key => $value ) {
-		$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE user_id = %d AND meta_key = %s", wcspc_resolve( $value, $who ), $uid, $key ) );
+		$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE user_id = %d AND meta_key = %s", wcspc_resolve( $value, $who ), $uid, $key ) ) );
 	}
 }
 $n_del = 0;
 foreach ( (array) $cfg['user_meta']['delete'] as $key ) {
-	$n_del += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s AND user_id NOT IN ($staff_in)", $key ) );
+	$n_del += $w( $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s AND user_id NOT IN ($staff_in)", $key ) ) );
 }
 foreach ( (array) $cfg['user_meta']['delete_prefix'] as $prefix ) {
-	$n_del += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key LIKE %s AND user_id NOT IN ($staff_in)", $wpdb->esc_like( $prefix ) . '%' ) );
+	$n_del += $w( $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key LIKE %s AND user_id NOT IN ($staff_in)", $wpdb->esc_like( $prefix ) . '%' ) ) );
 }
 $log( 'user meta rows updated / deleted', "$n / $n_del" );
 
-/* Order meta rules shared by HPOS (wc_orders_meta) and legacy orders (postmeta). */
-$order_meta = function ( $table, $pk, $where ) use ( $wpdb, $cfg, $fake ) {
+/*
+ * Meta rules (blank / text / delete / json, plus any kana key) for a meta table: order meta
+ * of HPOS (wc_orders_meta) and legacy orders (postmeta), and order item meta.
+ */
+$meta_rules = function ( $table, $pk, $where, array $rules ) use ( $wpdb, $fake, $w ) {
 	$n = 0;
-	foreach ( (array) $cfg['order_meta']['blank'] as $key ) {
-		$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = '' WHERE meta_key = %s AND $where", $key ) );
+	foreach ( (array) $rules['blank'] as $key ) {
+		$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = '' WHERE meta_key = %s AND $where", $key ) ) );
 	}
-	foreach ( (array) $cfg['order_meta']['text'] as $key ) {
-		$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = %s WHERE meta_key = %s AND meta_value <> '' AND $where", $fake['text'], $key ) );
+	foreach ( (array) $rules['text'] as $key ) {
+		$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = %s WHERE meta_key = %s AND meta_value <> '' AND $where", $fake['text'], $key ) ) );
 	}
 	foreach ( $wpdb->get_col( "SELECT DISTINCT meta_key FROM $table WHERE $where" ) as $key ) {
 		if ( wcspc_is_kana_key( $key ) ) {
-			$n += (int) $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = %s WHERE meta_key = %s AND meta_value <> '' AND $where", $fake['kana'], $key ) );
+			$n += $w( $wpdb->query( $wpdb->prepare( "UPDATE $table SET meta_value = %s WHERE meta_key = %s AND meta_value <> '' AND $where", $fake['kana'], $key ) ) );
 		}
 	}
 	$d = 0;
-	foreach ( (array) $cfg['order_meta']['delete'] as $key ) {
-		$d += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM $table WHERE meta_key = %s AND $where", $key ) );
+	foreach ( (array) $rules['delete'] as $key ) {
+		$d += $w( $wpdb->query( $wpdb->prepare( "DELETE FROM $table WHERE meta_key = %s AND $where", $key ) ) );
 	}
 	$j = 0;
-	foreach ( (array) $cfg['order_meta']['json'] as $key => $map ) {
+	foreach ( (array) ( isset( $rules['json'] ) ? $rules['json'] : array() ) as $key => $map ) {
 		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT $pk AS row_id, meta_value FROM $table WHERE meta_key = %s AND meta_value <> '' AND $where", $key ) );
 		foreach ( $rows as $row ) {
-			$wpdb->update( $table, array( 'meta_value' => wcspc_rewrite_json( $row->meta_value, (array) $map ) ), array( $pk => (int) $row->row_id ) );
+			$w( $wpdb->update( $table, array( 'meta_value' => wcspc_rewrite_json( $row->meta_value, (array) $map ) ), array( $pk => (int) $row->row_id ) ) );
 			++$j;
 		}
 	}
@@ -157,32 +177,34 @@ if ( $has( 'wc_orders' ) ) {
 	$ident = array();
 	foreach ( $wpdb->get_results( "SELECT id, customer_id FROM {$p}wc_orders" ) as $o ) {
 		$ident[ (int) $o->id ] = $order_identity( $o->id, $o->customer_id );
-		$wpdb->update( "{$p}wc_orders", array( 'billing_email' => $ident[ (int) $o->id ]['email'] ), array( 'id' => (int) $o->id ) );
+		$w( $wpdb->update( "{$p}wc_orders", array( 'billing_email' => $ident[ (int) $o->id ]['email'] ), array( 'id' => (int) $o->id ) ) );
 	}
-	$wpdb->query( "UPDATE {$p}wc_orders SET customer_note = '', ip_address = '', user_agent = ''" );
+	$w( $wpdb->query( "UPDATE {$p}wc_orders SET customer_note = '', ip_address = '', user_agent = ''" ) );
 	$log( 'HPOS orders anonymized', count( $ident ) );
 
 	if ( $has( 'wc_order_addresses' ) ) {
-		$wpdb->query(
-			$wpdb->prepare(
-				"UPDATE {$p}wc_order_addresses SET first_name = %s, company = %s, address_1 = %s, address_2 = %s, city = %s, postcode = %s, phone = %s",
-				$fake['first_name'], $fake['company'], $fake['address_1'], $fake['address_2'], $fake['city'], $fake['postcode'], $fake['phone']
+		$w(
+			$wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$p}wc_order_addresses SET first_name = %s, company = %s, address_1 = %s, address_2 = %s, city = %s, postcode = %s, phone = %s",
+					$fake['first_name'], $fake['company'], $fake['address_1'], $fake['address_2'], $fake['city'], $fake['postcode'], $fake['phone']
+				)
 			)
 		);
 		$rows = $wpdb->get_results( "SELECT id, order_id, address_type, state, country FROM {$p}wc_order_addresses" );
 		foreach ( $rows as $a ) {
 			$oid = (int) $a->order_id;
 			$i   = isset( $ident[ $oid ] ) ? $ident[ $oid ] : $order_identity( $oid, 0 );
-			$wpdb->update( "{$p}wc_order_addresses", array( 'last_name' => $i['last'], 'email' => $i['email'] ), array( 'id' => (int) $a->id ) );
+			$w( $wpdb->update( "{$p}wc_order_addresses", array( 'last_name' => $i['last'], 'email' => $i['email'] ), array( 'id' => (int) $a->id ) ) );
 			$index = wcspc_address_index( array_merge( $fake, array( 'last_name' => $i['last'], 'state' => $a->state, 'country' => $a->country, 'email' => $i['email'] ) ) );
 			if ( $has( 'wc_orders_meta' ) ) {
-				$wpdb->query( $wpdb->prepare( "UPDATE {$p}wc_orders_meta SET meta_value = %s WHERE order_id = %d AND meta_key = %s", $index, $oid, '_' . $a->address_type . '_address_index' ) );
+				$w( $wpdb->query( $wpdb->prepare( "UPDATE {$p}wc_orders_meta SET meta_value = %s WHERE order_id = %d AND meta_key = %s", $index, $oid, '_' . $a->address_type . '_address_index' ) ) );
 			}
 		}
 		$log( 'HPOS order addresses anonymized', count( $rows ) );
 	}
 	if ( $has( 'wc_orders_meta' ) ) {
-		list( $n, $d, $j ) = $order_meta( "{$p}wc_orders_meta", 'id', '1 = 1' );
+		list( $n, $d, $j ) = $meta_rules( "{$p}wc_orders_meta", 'id', '1 = 1', (array) $cfg['order_meta'] );
 		$log( 'HPOS order meta updated / deleted / json rewritten', "$n / $d / $j" );
 	}
 }
@@ -202,12 +224,12 @@ if ( $legacy ) {
 		$const[ "_{$type}_phone" ]      = $fake['phone'];
 	}
 	foreach ( $const as $key => $value ) {
-		$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE meta_key = %s AND $legacy_where", $value, $key ) );
+		$w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE meta_key = %s AND $legacy_where", $value, $key ) ) );
 	}
 	foreach ( $legacy as $o ) {
 		$i = $order_identity( $o->ID, $o->customer_id );
 		foreach ( array( '_billing_last_name' => $i['last'], '_shipping_last_name' => $i['last'], '_billing_email' => $i['email'] ) as $key => $value ) {
-			$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE post_id = %d AND meta_key = %s", $value, (int) $o->ID, $key ) );
+			$w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE post_id = %d AND meta_key = %s", $value, (int) $o->ID, $key ) ) );
 		}
 		foreach ( array( 'billing', 'shipping' ) as $type ) {
 			$parts = array( 'state' => '', 'country' => '' );
@@ -215,33 +237,56 @@ if ( $legacy ) {
 				$parts[ $k ] = (string) $wpdb->get_var( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s", (int) $o->ID, "_{$type}_{$k}" ) );
 			}
 			$index = wcspc_address_index( array_merge( $fake, $parts, array( 'last_name' => $i['last'], 'email' => 'billing' === $type ? $i['email'] : '' ) ) );
-			$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE post_id = %d AND meta_key = %s", $index, (int) $o->ID, "_{$type}_address_index" ) );
+			$w( $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->postmeta} SET meta_value = %s WHERE post_id = %d AND meta_key = %s", $index, (int) $o->ID, "_{$type}_address_index" ) ) );
 		}
 	}
-	$wpdb->query( "UPDATE {$wpdb->posts} SET post_excerpt = '' WHERE post_type = 'shop_order'" );
-	list( $n, $d, $j ) = $order_meta( $wpdb->postmeta, 'meta_id', $legacy_where );
+	$w( $wpdb->query( "UPDATE {$wpdb->posts} SET post_excerpt = '' WHERE post_type = 'shop_order'" ) );
+	list( $n, $d, $j ) = $meta_rules( $wpdb->postmeta, 'meta_id', $legacy_where, (array) $cfg['order_meta'] );
 	$log( 'legacy orders anonymized (meta upd / del / json)', count( $legacy ) . " ($n / $d / $j)" );
 }
 
+/* 3b. Order item meta: what add-on plugins stored from the customer (pii-inventory.php lists the keys). */
+if ( $has( 'woocommerce_order_itemmeta' ) ) {
+	list( $n, $d ) = $meta_rules( "{$p}woocommerce_order_itemmeta", 'meta_id', '1 = 1', (array) $cfg['order_item_meta'] );
+	$log( 'order item meta updated / deleted', "$n / $d" );
+}
+
 /* 4. Comments: order notes are free text (names, emails, tracking numbers), so delete them. */
-$n_meta = (int) $wpdb->query( "DELETE FROM {$wpdb->commentmeta} WHERE comment_id IN (SELECT comment_ID FROM {$wpdb->comments} WHERE comment_type = 'order_note')" );
-$n      = (int) $wpdb->query( "DELETE FROM {$wpdb->comments} WHERE comment_type = 'order_note'" );
+$n_meta = $w( $wpdb->query( "DELETE FROM {$wpdb->commentmeta} WHERE comment_id IN (SELECT comment_ID FROM {$wpdb->comments} WHERE comment_type = 'order_note')" ) );
+$n      = $w( $wpdb->query( "DELETE FROM {$wpdb->comments} WHERE comment_type = 'order_note'" ) );
 $log( 'order notes deleted (meta)', "$n ($n_meta)" );
+// Customers' comments that the public never sees (pending, spam, trash) are deleted outright.
+$unapproved = "comment_approved <> '1' AND user_id NOT IN ($staff_in)";
+$n_meta     = $w( $wpdb->query( "DELETE FROM {$wpdb->commentmeta} WHERE comment_id IN (SELECT comment_ID FROM {$wpdb->comments} WHERE $unapproved)" ) );
+$n          = $w( $wpdb->query( "DELETE FROM {$wpdb->comments} WHERE $unapproved" ) );
+$log( 'customer comments not approved: deleted (meta)', "$n ($n_meta)" );
+// Approved ones are public on production: keep the text, replace the author columns.
 $rows = $wpdb->get_col( "SELECT comment_ID FROM {$wpdb->comments} WHERE user_id NOT IN ($staff_in)" );
 foreach ( $rows as $cid ) {
-	$wpdb->update(
-		$wpdb->comments,
-		array(
-			'comment_author'       => 'ゲスト',
-			'comment_author_email' => 'commenter' . (int) $cid . '@example.com',
-			'comment_author_url'   => '',
-			'comment_author_IP'    => '',
-			'comment_agent'        => '',
-		),
-		array( 'comment_ID' => (int) $cid )
+	$w(
+		$wpdb->update(
+			$wpdb->comments,
+			array(
+				'comment_author'       => 'ゲスト',
+				'comment_author_email' => 'commenter' . (int) $cid . '@example.com',
+				'comment_author_url'   => '',
+				'comment_author_IP'    => '',
+				'comment_agent'        => '',
+			),
+			array( 'comment_ID' => (int) $cid )
+		)
 	);
 }
-$log( 'other comments / reviews: authors anonymized', count( $rows ) );
+$log( 'approved comments / reviews: authors anonymized', count( $rows ) );
+$customer_comments = "comment_id IN (SELECT comment_ID FROM {$wpdb->comments} WHERE user_id NOT IN ($staff_in))";
+$n                 = 0;
+foreach ( (array) $cfg['comment_meta']['delete'] as $key ) {
+	$n += $w( $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->commentmeta} WHERE meta_key = %s AND $customer_comments", $key ) ) );
+}
+foreach ( (array) $cfg['comment_meta']['delete_prefix'] as $prefix ) {
+	$n += $w( $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->commentmeta} WHERE meta_key LIKE %s AND $customer_comments", $wpdb->esc_like( $prefix ) . '%' ) ) );
+}
+$log( 'comment meta deleted (config)', $n );
 
 /* 5. Analytics, download permissions and logs. */
 if ( $has( 'wc_customer_lookup' ) ) {
@@ -255,7 +300,7 @@ if ( $has( 'wc_customer_lookup' ) ) {
 		}
 		$set['city']     = $fake['city'];
 		$set['postcode'] = $fake['postcode'];
-		$wpdb->update( "{$p}wc_customer_lookup", $set, array( 'customer_id' => (int) $r->customer_id ) );
+		$w( $wpdb->update( "{$p}wc_customer_lookup", $set, array( 'customer_id' => (int) $r->customer_id ) ) );
 	}
 	$log( 'customer lookup rows anonymized', count( $rows ) );
 }
@@ -263,38 +308,38 @@ if ( $has( 'woocommerce_downloadable_product_permissions' ) ) {
 	$rows = $wpdb->get_results( "SELECT permission_id, user_id FROM {$p}woocommerce_downloadable_product_permissions" );
 	foreach ( $rows as $r ) {
 		$email = ( (int) $r->user_id > 0 && ! $is_staff( $r->user_id ) ) ? wcspc_customer_identity( $r->user_id )['email'] : 'guest-p' . (int) $r->permission_id . '@example.com';
-		$wpdb->update( "{$p}woocommerce_downloadable_product_permissions", array( 'user_email' => $email ), array( 'permission_id' => (int) $r->permission_id ) );
+		$w( $wpdb->update( "{$p}woocommerce_downloadable_product_permissions", array( 'user_email' => $email ), array( 'permission_id' => (int) $r->permission_id ) ) );
 	}
 	$log( 'download permissions anonymized', count( $rows ) );
 }
 if ( $has( 'wc_download_log' ) ) {
-	$log( 'download log IPs cleared', (int) $wpdb->query( "UPDATE {$p}wc_download_log SET user_ip_address = ''" ) );
+	$log( 'download log IPs cleared', $w( $wpdb->query( "UPDATE {$p}wc_download_log SET user_ip_address = ''" ) ) );
 }
 foreach ( (array) $cfg['truncate_tables'] as $t ) {
 	if ( $has( $t ) ) {
-		$log( "table {$p}{$t} emptied", (int) $wpdb->query( "DELETE FROM {$p}{$t}" ) );
+		$log( "table {$p}{$t} emptied", $w( $wpdb->query( "DELETE FROM {$p}{$t}" ) ) );
 	}
 }
 foreach ( (array) $cfg['delete_post_types'] as $type ) {
 	$ids = array_map( 'intval', $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s", $type ) ) );
 	if ( $ids ) {
 		$in = implode( ',', $ids );
-		$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN ($in)" );
-		$wpdb->query( "DELETE FROM {$wpdb->posts} WHERE ID IN ($in)" );
+		$w( $wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN ($in)" ) );
+		$w( $wpdb->query( "DELETE FROM {$wpdb->posts} WHERE ID IN ($in)" ) );
 	}
 	$log( "posts of type {$type} deleted", count( $ids ) );
 }
 
 foreach ( (array) $cfg['delete_options'] as $option ) {
-	$log( "option {$option} deleted", (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $option ) ) );
+	$log( "option {$option} deleted", $w( $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $option ) ) ) );
 }
 
 if ( $dry ) {
-	$wpdb->query( 'ROLLBACK' );
+	$w( $wpdb->query( 'ROLLBACK' ) );
 	WP_CLI::success( 'Dry run finished and rolled back. No files were deleted.' );
 	return;
 }
-$wpdb->query( 'COMMIT' );
+$w( $wpdb->query( 'COMMIT' ) );
 
 /* 6. Generated documents and logs in uploads. */
 $base  = wp_upload_dir()['basedir'];

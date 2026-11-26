@@ -78,6 +78,18 @@ is "customer identity" "wcspc_customer_identity(7)" '{"id":7,"login":"customer7"
 is "the default rules cover the verified-email meta that a first run once missed" \
 	"wcspc_default_config()['user_meta']['per_user']['_wc_email_verified_wp']" '"@email"'
 
+# Order item meta and comment meta to decide on ("要確認") ----------------------------------------
+ITEMS="array('_qty' => 9, '_line_total' => 9, 'method_id' => 3, 'Items' => 3, 'pa_color' => 4, 'お名前入れ' => 2, 'Gift message' => 1, '_gift_recipient_name' => 1, 'furigana' => 1)"
+is "item meta: customer-facing keys are listed even when the name says nothing (add-on labels)" \
+	"wcspc_item_meta_todo($ITEMS, wcspc_default_config())" '{"お名前入れ":2,"Gift message":1,"_gift_recipient_name":1}'
+is "item meta: a key the site config handles is no longer listed" \
+	"array_keys(wcspc_item_meta_todo($ITEMS, wcspc_merge_config(wcspc_default_config(), array('order_item_meta' => array('blank' => array('お名前入れ'), 'delete' => array('Gift message'))))))" '["_gift_recipient_name"]'
+is "comment meta: every key but the review rating and verified flag is listed" \
+	"wcspc_comment_meta_todo(array('rating' => 5, 'verified' => 5, 'spamcheck_submitted' => 2, 'ip_note' => 1), wcspc_default_config())" '{"spamcheck_submitted":2,"ip_note":1}'
+is "comment meta: keys deleted by the config (exact or prefix) are not listed" \
+	"wcspc_comment_meta_todo(array('spamcheck_submitted' => 2, 'ip_note' => 1), wcspc_merge_config(wcspc_default_config(), array('comment_meta' => array('delete' => array('ip_note'), 'delete_prefix' => array('spamcheck_')))))" '[]'
+is "personal-looking key names" "array(wcspc_looks_personal('_billing_phone'), wcspc_looks_personal('_qty'))" '[true,false]'
+
 echo
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

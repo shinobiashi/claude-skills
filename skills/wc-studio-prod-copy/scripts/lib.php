@@ -52,6 +52,70 @@ function wcspc_is_kana_key( $key ) {
 }
 
 /**
+ * Whether a meta key's name looks like it holds personal data.
+ *
+ * @param string $key Meta key.
+ * @return bool
+ */
+function wcspc_looks_personal( $key ) {
+	return (bool) preg_match( '/(e-?mail|phone|tel(_|$)|mobile|fax|contact|name|kana|address|addr|postal|zip|postcode|city|(^|_)ip(_|$)|user_?agent|note|memo|noshi|slip|tracking|secret|token|card|birth)/i', (string) $key );
+}
+
+/**
+ * Order item meta keys to decide on ("要確認"). Add-on plugins store what the customer typed
+ * under display labels ("お名前入れ"), which no name pattern catches, so every key without a
+ * leading underscore is listed, apart from WooCommerce's own shipping, fee, tax and coupon item
+ * keys and global attributes (pa_*). Underscore keys are listed when their names look personal.
+ *
+ * @param array<string, int> $counts Meta key => number of rows.
+ * @param array              $cfg    Config (order_item_meta rules cover keys).
+ * @return array<string, int>
+ */
+function wcspc_item_meta_todo( array $counts, array $cfg ) {
+	$core    = array( 'method_id', 'instance_id', 'cost', 'total_tax', 'taxes', 'Items', 'rate_code', 'rate_id', 'label', 'compound', 'tax_amount', 'shipping_tax_amount', 'rate_percent', 'discount_amount', 'discount_amount_tax', 'coupon_info', 'coupon_data' );
+	$rules   = (array) $cfg['order_item_meta'];
+	$covered = array_merge( (array) $rules['blank'], (array) $rules['text'], (array) $rules['delete'] );
+	$todo    = array();
+	foreach ( $counts as $key => $n ) {
+		$key = (string) $key;
+		if ( in_array( $key, $covered, true ) || wcspc_is_kana_key( $key ) ) {
+			continue;
+		}
+		$listed = '_' === substr( $key, 0, 1 ) ? wcspc_looks_personal( $key ) : ! in_array( $key, $core, true ) && 0 !== strpos( $key, 'pa_' );
+		if ( $listed ) {
+			$todo[ $key ] = (int) $n;
+		}
+	}
+	return $todo;
+}
+
+/**
+ * Comment meta keys (of customers' comments) to decide on ("要確認"): every key except
+ * WooCommerce's review rating and verified-owner flag and the keys the config deletes.
+ *
+ * @param array<string, int> $counts Meta key => number of rows.
+ * @param array              $cfg    Config (comment_meta rules cover keys).
+ * @return array<string, int>
+ */
+function wcspc_comment_meta_todo( array $counts, array $cfg ) {
+	$rules = (array) $cfg['comment_meta'];
+	$todo  = array();
+	foreach ( $counts as $key => $n ) {
+		$key = (string) $key;
+		if ( in_array( $key, array( 'rating', 'verified' ), true ) || in_array( $key, (array) $rules['delete'], true ) ) {
+			continue;
+		}
+		foreach ( (array) $rules['delete_prefix'] as $prefix ) {
+			if ( 0 === strpos( $key, (string) $prefix ) ) {
+				continue 2;
+			}
+		}
+		$todo[ $key ] = (int) $n;
+	}
+	return $todo;
+}
+
+/**
  * Fake values written in place of personal data.
  *
  * @return array<string, string>
@@ -212,6 +276,18 @@ function wcspc_default_config() {
 			'text'         => array( '_wc_other/jp4wc-pro/noshi-name', '_wc_other/jp4wc-pro/noshi-name-request' ),
 			'delete'       => array( '_payjp_client_secret' ),
 			'json'         => (object) array(),
+		),
+		// Order item meta (woocommerce_order_itemmeta). Nothing by default: add-on plugins name
+		// these keys, so pii-inventory.php lists them and the site config says what to do.
+		'order_item_meta' => array(
+			'blank'  => array(),
+			'text'   => array(),
+			'delete' => array(),
+		),
+		// Meta of customers' comments that remain (approved ones; the rest are deleted).
+		'comment_meta'    => array(
+			'delete'        => array(),
+			'delete_prefix' => array(),
 		),
 		'truncate_tables' => array( 'woocommerce_sessions', 'wpml_mails', 'wpmailsmtp_debug_events', 'wpmailsmtp_emails_log', 'actionscheduler_logs', 'actionscheduler_claims', 'actionscheduler_actions' ),
 		'delete_post_types' => array( 'feedback', 'flamingo_inbound', 'flamingo_contact' ),

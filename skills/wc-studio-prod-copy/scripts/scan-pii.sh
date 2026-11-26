@@ -18,6 +18,8 @@
 # also with letters glued on after it. With characters glued on BEFORE it, it fails and is
 # reported on its own line: bytes of the neighbouring column (in SQLite, user_nicename comes
 # right before user_email) cannot be told from a different, longer address (shop@ -> myshop@).
+# The local part is read with every character an address may contain (customer=shop@ is one
+# address, not shop@), except that a leading apostrophe is the quote of an SQL or JSON value.
 # When find-string.php shows that every hit is a staff or store row, pass
 # --allow-glued-address. --allow-file reads one entry per line (an entry with @ is an address,
 # otherwise a domain; # starts a comment), such as the file pii-inventory.php write-allow=
@@ -26,10 +28,15 @@
 #
 # Exit: 0 nothing found; 1 addresses outside the allowlist, allowlisted addresses with
 # characters glued on before them, generated documents or archives found; 2 usage error,
-# missing path, or nothing scannable under the paths.
+# missing path, nothing scannable under the paths, or a file that could not be read (this
+# wins over 1: the result says nothing about that file).
 set -uo pipefail
 
 ALLOW="example.com example.org example.net localhost localdomain invalid test"
+# RFC 5322 atext plus the dot. An apostrophe counts only between them (o'brien@): a leading one
+# is the quote around an SQL or JSON value ('admin@example.com').
+LOCAL_CHARS='A-Za-z0-9.!#$%&*+/=?^_`{|}~-'
+EMAIL_RE="[${LOCAL_CHARS}]+('[${LOCAL_CHARS}]+)*@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
 ALLOW_ADDR=""
 ALLOW_GLUED=0
 PHONES=0
@@ -66,13 +73,14 @@ while [ $# -gt 0 ]; do
 		;;
 	--allow-glued-address) ALLOW_GLUED=1; shift ;;
 	--phones) PHONES=1; shift ;;
-	-h | --help) sed -n '2,29p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,32p' "$0"; exit 0 ;;
 	--) shift; PATHS+=("$@"); break ;;
 	-*) echo "scan-pii: unknown option $1" >&2; exit 2 ;;
 	*) PATHS+=("$1"); shift ;;
 	esac
 done
 [ ${#PATHS[@]} -gt 0 ] || { echo "scan-pii: give at least one PATH (see --help)" >&2; exit 2; }
+command -v strings >/dev/null 2>&1 || { echo "scan-pii: strings not found (install binutils or the Xcode command line tools)" >&2; exit 2; }
 
 FOUND=0
 FILES=()
@@ -121,10 +129,11 @@ done
 
 # One line per address that does not pass: "outside <domain>", or "glued <domain>" for an
 # allowlisted address with characters glued on before it ("glued-ok <domain>" with
-# --allow-glued-address, for the informational count).
+# --allow-glued-address, for the informational count). Returns non-zero when the file could
+# not be read: empty output must not pass for a clean file.
 classify_addresses() {
 	LC_ALL=C strings -n 6 "$1" 2>/dev/null |
-		LC_ALL=C grep -oiE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' |
+		LC_ALL=C grep -oiE "$EMAIL_RE" |
 		awk -v allow="$ALLOW" -v addrs="$ALLOW_ADDR" -v allow_glued="$ALLOW_GLUED" '
 			# What `strings` glues on after a TLD from the next bytes: letters only. Anything
 			# with a dot or a digit in it is a longer domain (testcompany.jp, example.com.evil).
@@ -154,6 +163,9 @@ classify_addresses() {
 				if (glued) print (allow_glued ? "glued-ok " : "glued ") d
 				else print "outside " d
 			}'
+	# strings must succeed; grep exits 1 when there is simply no address.
+	local status=("${PIPESTATUS[@]}")
+	[ "${status[0]}" -eq 0 ] && [ "${status[1]}" -le 1 ] && [ "${status[2]}" -eq 0 ]
 }
 
 if [ ${#FILES[@]} -eq 0 ] && [ "$FOUND" -eq 0 ]; then
@@ -163,10 +175,15 @@ fi
 
 TOTAL=0
 GLUED=0
+UNREAD=0
 # by_domain DOMAINS: one "count *@domain" line per domain, most frequent first.
 by_domain() { printf '%s\n' "$1" | sort | uniq -c | sort -rn | awk '{ printf "   %5d *@%s\n", $1, $2 }'; }
 for f in ${FILES[@]+"${FILES[@]}"}; do
-	hits="$(classify_addresses "$f")"
+	if ! hits="$(classify_addresses "$f")"; then
+		echo "== $f: could not be read (permissions, or strings failed) — nothing is known about it"
+		UNREAD=$((UNREAD + 1))
+		continue
+	fi
 	domains="$(printf '%s\n' "$hits" | sed -n 's/^outside //p')"
 	glued="$(printf '%s\n' "$hits" | sed -n 's/^glued //p')"
 	glued_ok="$(printf '%s\n' "$hits" | sed -n 's/^glued-ok //p')"
@@ -196,6 +213,10 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
 	fi
 done
 
+if [ "$UNREAD" -gt 0 ]; then
+	echo "INCOMPLETE: ${UNREAD} of ${#FILES[@]} file(s) could not be read (see above). Fix that and run again — an unread file is not a clean one."
+	exit 2
+fi
 if [ "$FOUND" -eq 0 ]; then
 	echo "OK: scanned ${#FILES[@]} file(s); no addresses outside the allowlist ($ALLOW)."
 	exit 0

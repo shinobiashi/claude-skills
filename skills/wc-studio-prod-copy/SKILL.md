@@ -1,6 +1,6 @@
 ---
 name: wc-studio-prod-copy
-description: 本番の WooCommerce サイトを WordPress Studio のローカルサイトに取り込み（テーマを除く DB・uploads・plugins）、本番のふるまい（WP-Cron・Action Scheduler・SMTP 送信・外部 API への通信）を止めたうえで、顧客データを匿名化するスキル。取り込む前に置く安全策の mu-plugin、個人情報の洗い出し（pii-inventory.php）、匿名化（anonymize.php。HPOS と旧来の注文・顧客・注文メモ・レビュー・ログ・領収書 PDF。サイト固有のメタキーは設定 JSON で足す）、データベースのファイルを走査して許可していないメールアドレスが 1 件でもあれば失敗する関門（scan-pii.sh）、文字列の在りかを探す find-string.php を同梱する。「本番をローカルに取り込んで」「本番環境からテーマ以外を Studio に反映して」「ローカルでも本番と同じ見た目で確認したい」「顧客データを匿名化して」「ローカルの個人情報を消して」「本番の複製を安全にして」などと言われたら使う。
+description: 本番の WooCommerce サイトを WordPress Studio のローカルサイトに取り込み（テーマを除く DB・uploads・plugins）、本番のふるまい（WP-Cron・Action Scheduler・SMTP 送信・外部 API への通信）を止めたうえで、顧客データを匿名化するスキル。取り込む前に置く安全策の mu-plugin、個人情報の洗い出し（pii-inventory.php）、匿名化（anonymize.php。HPOS と旧来の注文・注文の明細のメタ・顧客・注文メモ・レビュー〔未承認は削除〕・ログ・領収書 PDF。サイト固有のメタキーは設定 JSON で足す。書き込みが 1 つでも失敗したら全部を巻き戻す）、データベースのファイルを走査して許可していないメールアドレスが 1 件でもあれば失敗する関門（scan-pii.sh）、文字列の在りかを探す find-string.php を同梱する。「本番をローカルに取り込んで」「本番環境からテーマ以外を Studio に反映して」「ローカルでも本番と同じ見た目で確認したい」「顧客データを匿名化して」「ローカルの個人情報を消して」「本番の複製を安全にして」などと言われたら使う。
 ---
 
 # wc-studio-prod-copy — 本番の複製をローカルに作り、匿名化する
@@ -13,9 +13,9 @@ description: 本番の WooCommerce サイトを WordPress Studio のローカル
 | ファイル | 役割 |
 |---|---|
 | `assets/local-prod-copy-safety.php` | 取り込む前に `wp-content/mu-plugins/` に置く安全策。ローカル（環境が local/development かつ localhost 等）でだけ動き、WP-Cron（`wp-cron.php` を直接叩かれた場合も）・Action Scheduler の非同期実行を止め、SMTP 系のプラグインを読み込まず（Studio がメールを手元に保存する）、外部への HTTP を止める。管理画面に「止めているもの」を出す |
-| `scripts/pii-inventory.php` | 個人情報がありそうな場所の一覧（空でないテーブル、権限ごとの人数、HPOS、有効なプラグイン、規則が扱っていない個人情報らしいメタキー＝「要確認」）。`write-allow=` で管理者・店舗のアドレスを走査の許可リストに書き出す |
-| `scripts/anonymize.php` | 匿名化。ローカルでなければ拒否する。`dry-run` はトランザクションで巻き戻す。SQLite なら最後に VACUUM |
-| `scripts/scan-pii.sh` | **関門**。DB ファイル（-wal も）・SQL の控え・ログを走査し、許可していないメールアドレス、許可したアドレスの前に文字が付いたもの、領収書 PDF、読めない圧縮ファイル（直接指定しても）があれば exit 1。表示はドメインだけ |
+| `scripts/pii-inventory.php` | 個人情報がありそうな場所の一覧（空でないテーブル、権限ごとの人数、HPOS、有効なプラグイン、規則が扱っていない個人情報らしいメタキー、注文の明細のメタのうち顧客に見えるキーすべて、顧客のコメントのメタのキー＝「要確認」）。`write-allow=` で管理者・店舗のアドレスを走査の許可リストに書き出す |
+| `scripts/anonymize.php` | 匿名化。ローカルでなければ拒否する。書き込みが 1 つでも失敗したら全部を巻き戻して失敗する。`dry-run` はトランザクションで巻き戻す。顧客の未承認・スパム・ゴミ箱のコメントは削除し、承認済みは本文を残して投稿者を置き換える。SQLite なら最後に VACUUM |
+| `scripts/scan-pii.sh` | **関門**。DB ファイル（-wal も）・SQL の控え・ログを走査し、許可していないメールアドレス、許可したアドレスの前に文字が付いたもの、領収書 PDF、読めない圧縮ファイル（直接指定しても）があれば exit 1。読めないファイル（権限・`strings` の失敗）があれば exit 2。表示はドメインだけ |
 | `scripts/find-string.php` | 文字列（`@gmail.com` など）がどのテーブル・列・行・メタキーにあるか |
 | `scripts/lib.php` | WordPress 抜きで試せる関数（ローカルかどうかの判定、JSON の書き換え、既定の規則） |
 | `assets/anonymize-config.example.json` | サイト固有のメタキーを足す設定 JSON の見本（cart-bridge-jp を使う店舗の例） |
@@ -74,6 +74,12 @@ wp eval-file <site>/.prod-copy-tmp/pii-inventory.php config=<site>/.prod-copy-tm
   中身を `wp eval 'echo get_metadata(...)'` などで数件見て、個人情報ならサイトの設定 JSON に足し（見本: `assets/anonymize-config.example.json`。
   規則の意味は `scripts/lib.php` の `wcspc_default_config()`）、そうでなければ判断を報告に書く。キー名だけの推測なので、個人情報らしくない名前のキー
   （例: `x_custom_contact`）は出てこない。メールアドレスが入っていれば 6 の走査で見つかる
+- **注文の明細のメタ（`woocommerce_order_itemmeta`）は、`_` で始まらないキーをすべて「要確認」に出す**（WooCommerce 自身の配送・手数料・税・クーポンのキーと
+  `pa_*` の属性を除く）。アドオン系のプラグインは「お名前入れ」など顧客が入力した値を、画面の表示名をそのままキーにして保存するので、名前では拾えない。
+  個人情報なら設定 JSON の `order_item_meta`（`blank`・`text`・`delete`）に足す
+- **顧客のコメント・レビュー**: 承認済みは本文を残す（本番で公開済み。商品ページの見た目も変わらない）、未承認・スパム・ゴミ箱は 5 で削除される。
+  承認済みのコメントのメタのキーは「要確認」に出る（WooCommerce の `rating`・`verified` を除く）。送信内容を控えるプラグインのキーなど、個人情報なら
+  設定 JSON の `comment_meta`（`delete`・`delete_prefix`）に足す
 - 有効なプラグインを見て、2-3 の `LOCAL_PROD_COPY_UNLOAD_PLUGINS` に足すものをユーザーと決める
 - 設定 JSON には個人情報が入らないので、次に取り込み直すときのために残しておく場所をユーザーと決める（例: プロジェクトの `docs/local-prod-copy/`。
   店舗・管理者のドメインの許可リストも同じ場所に置ける。テーマの CLAUDE.md からそこを指しておく）
@@ -87,6 +93,7 @@ wp eval-file <site>/.prod-copy-tmp/anonymize.php config=<site>/.prod-copy-tmp/si
 
 `dry-run` の件数（顧客・注文・住所の数）が 4 の洗い出しと合っているかを見てから本番どおりに実行する。管理者（既定は administrator・shop_manager）は残る。
 WooCommerce や WordPress の API で保存し直すと連携のフックが動くので、スクリプトは直接クエリで書き換える。
+書き込みが 1 つでも失敗すると（「Database error; everything was rolled back」）、何も変えずに失敗する。出た SQL とエラーを見て、設定か DB の状態を直してからやり直す。
 
 ### 6. 関門: ファイルを走査する
 
@@ -101,7 +108,9 @@ bash scan-pii.sh --allow-file <site>/.prod-copy-tmp/allow.txt [--allow-domain <�
   - **顧客が使うフリーメールのドメイン（gmail.com など）は許可しない**。管理者の個人アドレスが gmail なら `--allow-address` でアドレスだけを許可する
 - 「allowlisted address(es) with characters glued on before them」が出たら、許可したアドレスの前に文字が付いている。隣の列の値か、
   そのアドレスで終わる別のアドレス（`shop@` に対する `myshop@`）かは区別できないので、`find-string.php '<許可したアドレス>'` で場所を見る。
-  すべて管理者・店舗の行なら `--allow-glued-address` を付けて走査し直す。顧客の行があれば、上の「顧客のデータ」と同じく直す
+  すべて管理者・店舗の行なら `--allow-glued-address` を付けて走査し直す。顧客の行があれば、上の「顧客のデータ」と同じく直す。
+  アドレスの前の部分は、アドレスに使える文字（`=` など）をすべて含めて読むので、`customer=shop@…` も「前に文字が付いたもの」として出る
+- 読めないファイルがあると（権限、`strings` の失敗）exit 2 の「INCOMPLETE」で止まる。読めないファイルは「何も無い」ではないので、読めるようにしてやり直す
 - 通るまで 5 と 6 を繰り返す。通ったら完了
 
 ### 7. 片付けと報告
@@ -138,10 +147,14 @@ bash scan-pii.sh --allow-file <site>/.prod-copy-tmp/allow.txt [--allow-domain <�
   cart-bridge-jp の配送 JSON・旧来の注文〔posts テーブル〕・注文メモ・レビュー・規則に無いメタキー）を直接入れ、`dry-run` が巻き戻すこと、
   匿名化で規則にあるものが消えること、規則に無いキーを走査が見つけ `find-string.php` が場所を示すこと、設定に足すと走査が通ることを確かめた
 - **MySQL（wp-env など）では未検証**（SQL は標準的なものだけを使っている）
+- **PR #5 のレビュー対応で足したもの（書き込みの失敗で巻き戻す、注文の明細のメタ、未承認のコメントの削除、コメントのメタ、洗い出しの追加分）は、
+  偽の `$wpdb` を使うテストでだけ確かめた。Studio の実際の DB では実行し直していない**。以前は黙って失敗していた書き込みがあれば、これからは
+  そこで止まるので、次に使うときは `dry-run` から始める
 - シナリオテスト（WordPress もネットワークも不要）:
 
 ```bash
 bash scripts/test-lib.sh "$PWD/scripts/lib.php"
+bash scripts/test-anonymize.sh "$PWD/scripts/anonymize.php"
 bash scripts/test-scan-pii.sh "$PWD/scripts/scan-pii.sh"
 bash scripts/test-safety-plugin.sh "$PWD/assets/local-prod-copy-safety.php"
 ```

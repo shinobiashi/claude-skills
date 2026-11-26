@@ -1,5 +1,5 @@
 {
-	"_comment": "Site config for anonymize.php / pii-inventory.php. Lists are added to the built-in rules and maps are merged into them (see wcspc_default_config() in scripts/lib.php). Values: '@first_name' '@address_1' '@city' '@postcode' '@phone' '@kana' '@text' map to the fake values; '@id' '@email' '@login' '@display_name' to the customer's anonymized identity (user meta only). This example is for a store that uses cart-bridge-jp.",
+	"_comment": "Site config for anonymize.php / pii-inventory.php. Lists are added to the built-in rules and maps are merged into them (see wcspc_default_config() in scripts/lib.php). Values: '@first_name' '@address_1' '@city' '@postcode' '@phone' '@kana' '@text' map to the fake values; '@id' '@email' '@login' '@display_name' to the customer's anonymized identity (user meta only). order_item_meta (blank / text / delete) and comment_meta (delete / delete_prefix) take the keys pii-inventory.php lists as 要確認. This example is for a store that uses cart-bridge-jp.",
 	"staff_roles": [ "administrator", "shop_manager" ],
 	"user_meta": {
 		"const": {
